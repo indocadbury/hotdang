@@ -203,7 +203,7 @@ async function loadCell(la, lo) {
   if (!cellCache[k]) cellCache[k] = fetch(`data/spots/${k}.json`).then((r) => (r.ok ? r.json() : { s: [] })).catch(() => null);
   return cellCache[k];
 }
-const OWN_TYPES = { r: ["restaurant", "Hotdogs", false], v: ["stand", "Hotdogs", false], c: ["shelf", "Roller-grill hotdog", true], f: ["restaurant", "Food court hotdog", true] };
+const OWN_TYPES = { r: ["restaurant", "Hotdogs", false], v: ["stand", "Hotdogs", false], c: ["shelf", "Roller-grill hotdog", true], f: ["restaurant", "Food court hotdog", true], k: ["restaurant", "Hotdogs on the menu", true] };
 async function ownSpots(c, r) {
   const dLat = r / 111000, dLng = r / (111000 * Math.max(0.1, Math.cos((c.lat * Math.PI) / 180)));
   const cells = [];
@@ -236,7 +236,7 @@ function mergeSpots(own, osm) {
 /* Nothing within 30 km (rural areas): keep looking outward, square by square, until we find the closest dog. */
 let cellIndex;
 const loadIndex = () => (cellIndex ||= fetch("data/spots/index.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
-async function farSpots(c) {
+async function farSpots(c, kinds) {
   const idx = await loadIndex();
   const cosLat = Math.max(0.05, Math.cos((c.lat * Math.PI) / 180));
   // rough distance (m) from c to the nearest edge of a 1-degree square
@@ -255,6 +255,7 @@ async function farSpots(c) {
     const batch = keys.slice(i, i + 6).filter((k) => k.gap < best);
     const got = await Promise.all(batch.map((k) => loadCell(k.la, k.lo)));
     for (const g of got) for (const [lat, lng, name, t, id] of (g && g.s) || []) {
+      if (kinds && !kinds.includes(t)) continue;
       const [type, item, likely] = OWN_TYPES[t] || OWN_TYPES.r;
       found.push({ id: `ov:${id}`, src: "overture", lat, lng, name, type, item, likely, osmSpecials: SPECIALS.filter((x) => x.re.test(name)).map((x) => x.key), hoursRaw: null });
     }
@@ -723,11 +724,18 @@ async function dogMe() {
   btn.classList.remove("sniff"); btn.textContent = "Dog me!"; sniffing = false;
   const list = visible();
   const n = list.find((s) => statusOf(s).state !== "closed") || list[0];
+  // if the closest is a 7-Eleven-style store, also find the closest real hotdog joint
+  let joint = null;
+  if (n && n.type === "shelf") {
+    joint = list.find((s) => s.type !== "shelf" && statusOf(s).state !== "closed");
+    if (!joint && state.me) { try { joint = (await farSpots(state.me, ["r", "v", "k", "f"]))[0] || null; } catch (e) {} }
+    if (joint && !findSpot(joint.id)) state.spots.push(joint);
+  }
   if (n) { state.selected = n.id; map.flyTo([n.lat, n.lng], Math.max(map.getZoom(), 16)); }
   render();
-  showDogPop(n);
+  showDogPop(n, joint);
 }
-function showDogPop(n) {
+function showDogPop(n, joint) {
   const body = $("#dogpopBody");
   if (!n) {
     body.innerHTML = `<h2 class="dogpop-title" id="dogpop-title">No dogs nearby… yet</h2>
@@ -743,6 +751,7 @@ function showDogPop(n) {
         <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : "away. Road trip!"}</span></div>
         ${sp.length ? `<div class="dogs">${sp.map((x) => `<span class="dogchip">${x.label}</span>`).join("")}</div>` : ""}
       </div>
+      ${joint ? `<button class="dogpop-joint" data-pop="joint" data-id="${esc(joint.id)}"><span>Closest hotdog joint</span><b>${esc(joint.name)}</b><span>${TYPES[joint.type]} · ${fmtDist(dist(joint))} away ›</span></button>` : ""}
       <div class="actions"><button class="btn eat" data-pop="go">${m > 5000 ? "Drive there" : "Take me there"}</button><button class="btn" data-pop="info">More info</button></div>`;
   }
   $("#dogpop").hidden = false;
@@ -755,6 +764,11 @@ $("#dogpop").addEventListener("click", (e) => {
   const b = e.target.closest("[data-pop]"); if (!b) return;
   const n = findSpot(state.selected);
   closeDogPop();
+  if (b.dataset.pop === "joint") {
+    const j = findSpot(b.dataset.id);
+    if (j) { state.selected = j.id; map.flyTo([j.lat, j.lng], Math.max(map.getZoom(), 15)); render(); showDogPop(j); }
+    return;
+  }
   if (b.dataset.pop === "go" && n) {
     if (dist(n) > 5000) window.open(mapsUrl(n).replace("travelmode=walking", "travelmode=driving"), "_blank", "noopener"); // too far to walk
     else { startNav(n); showPanel(); }
