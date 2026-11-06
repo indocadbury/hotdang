@@ -648,5 +648,42 @@ $("#addBtn").addEventListener("click", () => (state.mode === "add" ? ((state.mod
 $("#moveBtn").addEventListener("click", () => { state.mode = state.mode === "move" ? "browse" : "move"; state.draft = null; render(); });
 $("#locateBtn").addEventListener("click", () => locate(false));
 
+/* ---------- search for a place (OpenStreetMap Nominatim, only on submit, per its usage policy) ---------- */
+const searchForm = $("#searchForm"), searchInput = $("#searchInput"), searchResults = $("#searchResults");
+function openSearch(open) {
+  searchForm.hidden = !open; $("#searchBtn").setAttribute("aria-expanded", String(open)); $(".maptools").classList.toggle("tucked", open);
+  if (open) setTimeout(() => searchInput.focus(), 30); else { searchResults.hidden = true; searchResults.innerHTML = ""; }
+}
+$("#searchBtn").addEventListener("click", () => openSearch(searchForm.hidden));
+$("#searchClose").addEventListener("click", () => openSearch(false));
+let lastSearch = 0, places = [];
+searchForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = searchInput.value.trim(); if (!q) return;
+  if (Date.now() - lastSearch < 1200) return; lastSearch = Date.now();
+  searchResults.hidden = false; searchResults.innerHTML = `<p class="note">Searching…</p>`;
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=${encodeURIComponent(q)}&accept-language=${encodeURIComponent(navigator.language || "en")}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(res.status);
+    places = await res.json();
+    searchResults.innerHTML = places.length
+      ? places.map((p, i) => `<button type="button" class="place" data-place="${i}"><b>${esc(p.name || p.display_name.split(",")[0])}</b><span>${esc(p.display_name)}</span></button>`).join("")
+      : `<p class="note">Nothing found for "${esc(q)}". Try adding the city or country.</p>`;
+  } catch (err) { searchResults.innerHTML = `<p class="note">Search isn't working right now. Try again in a moment.</p>`; }
+});
+searchResults.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-place]"); if (!b) return;
+  const p = places[+b.dataset.place]; if (!p) return;
+  goTo({ lat: +p.lat, lng: +p.lon }, p.name || p.display_name.split(",")[0]);
+  openSearch(false); searchInput.value = "";
+});
+function goTo(pt, label) {
+  // looking somewhere else: stop following GPS until "Find me" is tapped
+  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  state.me = pt; state.gps = false; state.mode = "browse"; state.tab = "spots"; state.selected = null; state.nav = null;
+  map.setView([pt.lat, pt.lng], 15); toast(`Hotdogs near ${label}. Tap Find me to come back`); render(); loadSpots();
+}
+
 render();
 locate(true);
