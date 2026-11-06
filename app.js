@@ -53,6 +53,7 @@ const saveAll = () => { store.set("hd.eaten", state.eaten); store.set("hd.review
 
 /* ---------- helpers ---------- */
 const $ = (s) => document.querySelector(s);
+const OFFLINE_NOTE = "Photos, comments and the worldwide leaderboard can't connect right now. Your own hotdogs are still saved on this phone.";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function metres(a, b) {
   const R = 6371e3, r = Math.PI / 180;
@@ -208,7 +209,7 @@ async function loadSpots() {
   } catch (e) {
     state.error = "Couldn't reach the map data right now. Check your connection and try again.";
   }
-  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink();
+  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink(); try { social()?.onSpotsLoaded(); } catch (e) { console.error(e); }
 }
 
 /* ---------- map ---------- */
@@ -478,7 +479,7 @@ function spotCard(s, heading) {
   <h2>What dogs they have</h2>
   ${dogsSection(s)}
   <h2>Photos</h2>
-  <div id="hd-photos" data-spot="${esc(s.id)}"><p class="note">Loading photos…</p></div>
+  <div id="hd-photos" data-spot="${esc(s.id)}"><p class="note">${social() ? "Loading photos…" : OFFLINE_NOTE}</p></div>
   <h2>Reviews</h2>
   ${state.reviewing ? reviewForm() : `<div><button class="btn" data-act="review">Write a review</button></div>`}
   <div id="hd-reviews" data-spot="${esc(s.id)}"></div>
@@ -508,9 +509,9 @@ function statsView() {
   return `<div class="mycount"><div class="num">${me}</div><div><b>hotdogs eaten</b><div class="note">${week} this week · ${places} different spot${places === 1 ? "" : "s"}</div></div></div>
   ${recent ? `<h2>Your recent dogs</h2><div class="list">${recent}</div>` : `<p class="note">Tap "I ate one!" on any spot to start counting.</p>`}
   <div id="hd-account"></div>
-  <div id="hd-leaderboard"><div class="soon"><h2>Global leaderboard</h2><p class="note">Loading…</p></div></div>`;
+  <div id="hd-leaderboard"><div class="soon"><h2>Global leaderboard</h2><p class="note">${social() ? "Loading…" : OFFLINE_NOTE}</p></div></div>`;
 }
-const social = () => (window.HDSocial && window.HDSocial.ready ? window.HDSocial : null);
+function social() { return window.HDSocial && window.HDSocial.ready ? window.HDSocial : null; }
 function render() { renderCore(); try { social()?.afterRender(); } catch (e) { console.error(e); } }
 function renderCore() {
   drawMap();
@@ -522,7 +523,7 @@ function renderCore() {
   hint.textContent = state.mode === "move" ? "Tap the map to set where you are." : state.draft ? "Now fill in the details." : "Tap the map where the hotdog is.";
   const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="feed" aria-selected="${state.tab === "feed"}">Photos</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
   if (state.tab === "stats" && state.mode === "browse") { panel.innerHTML = tabs + statsView(); return; }
-  if (state.tab === "feed" && state.mode === "browse") { panel.innerHTML = tabs + `<div id="hd-feed"><p class="note">Loading the latest hotdog photos…</p></div>`; return; }
+  if (state.tab === "feed" && state.mode === "browse") { panel.innerHTML = tabs + `<div id="hd-feed"><h2>Latest hotdog photos</h2><p class="note">${social() ? "Loading the latest hotdog photos…" : OFFLINE_NOTE}</p></div>`; return; }
   const list = visible();
   const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"], ["special", "Specialty dogs"]]
     .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" && k !== "special" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");

@@ -274,10 +274,11 @@
     onSpotsLoaded() { loadSharedDogs(); },
   };
 
+  // supabase-js can deadlock if other calls are awaited inside this callback, so defer the work
   sb.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION") loadProfile().then(() => {
+    if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION") setTimeout(() => loadProfile().catch(() => {}).then(() => {
       if (event === "SIGNED_IN" && !me.profile) { state.tab = "stats"; toast("Signed in! Pick a username"); }
       render();
-    });
+    }), 0);
   });
 })();
