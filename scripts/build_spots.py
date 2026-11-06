@@ -17,6 +17,8 @@ SHELF = "7-Eleven|7-ELEVEn|Circle K|Wawa|Sheetz|QuikTrip|Speedway|Casey's|Kwik T
 FOOD_COURT = "Costco|IKEA"
 HOTDOG_NAME = r"hot ?dog|glizzy|wiener|frankfurt|corn ?dog|hotdog"
 MOBILE = re.compile(r"truck|cart|kiosk|stand|van\b|trailer", re.I)
+# stricter check for places matched only by name ("Wiener Blut" is a Vienna cafe, "Frankfurt Bar" isn't a hotdog bar)
+NAME_OK = re.compile(r"hot ?-?dog|hotdog|corn ?dog|glizzy|frankfurter|wienerschnitzel|\bwieners\b|\bweiners?\b|wiener ?(dog|stand|hut|wagon|works|king|cart|haus)", re.I)
 
 def ls(path):
     out = subprocess.check_output(["aws", "s3", "ls", "--no-sign-request", path]).decode()
@@ -54,9 +56,13 @@ for id_, nm, brand, cat, top, lat, lng in rows:
             continue
         kind = "c"
     else:
+        if "hot_dog" not in cat and not NAME_OK.search(nm):
+            continue
         kind = "v" if ("truck" in cat or "stand" in cat or "kiosk" in cat or MOBILE.search(nm)) else "r"
     kinds[kind] = kinds.get(kind, 0) + 1
     key = f"{int(lat // 1)}_{int(lng // 1)}"
+    if kind == "c" and brand and brand.split()[0].lower().replace("-", "") not in nm.lower().replace("-", ""):
+        nm = f"{brand} {nm}"   # chains often list just the branch, e.g. "La Trobe Street"
     cells.setdefault(key, []).append([round(lat, 5), round(lng, 5), nm[:80], kind, id_.replace("-", "")[:12]])
 
 os.makedirs(OUT, exist_ok=True)
