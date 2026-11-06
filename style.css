@@ -225,3 +225,11 @@ textarea{min-height:70px;resize:vertical}
 .dogpop-joint{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;margin-top:10px;text-align:left;background:var(--mustard);color:var(--mustard-ink);border:2px solid #2a1a0e;border-radius:14px;padding:10px 12px;font:inherit;cursor:pointer}
 .dogpop-joint span{font-size:13px;font-weight:600}
 .dogpop-joint b{font-size:17px}
+
+/* ---------- badges ---------- */
+.badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.badge-tile{border:2px dashed var(--line);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:2px;align-items:center;text-align:center;opacity:.6}
+.badge-tile.on{opacity:1;border:2px solid var(--ink);background:color-mix(in srgb,var(--mustard) 22%,var(--surface));box-shadow:0 3px 0 var(--ink)}
+.badge-tile .bi{font-size:30px;line-height:1.1}
+.badge-tile b{font-size:14px}
+.badge-tile .note{font-size:12px}
