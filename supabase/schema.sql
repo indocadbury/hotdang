@@ -25,6 +25,9 @@ create table if not exists public.posts (
   spot_name text,
   photo_path text not null,
   caption text check (char_length(caption) <= 280),
+  city text,
+  lat double precision,
+  lng double precision,
   created_at timestamptz not null default now()
 );
 

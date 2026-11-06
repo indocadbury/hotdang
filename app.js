@@ -575,9 +575,69 @@ function reviewForm() {
   return `<form id="reviewForm">
   <div class="starpick" role="group" aria-label="Your rating">${[1, 2, 3, 4, 5].map((i) => `<button type="button" data-star="${i}" class="${i <= state.pick ? "on" : ""}" aria-label="${i} star${i > 1 ? "s" : ""}">★</button>`).join("")}</div>
   <label for="r-text">Your review<textarea id="r-text" placeholder="How was the snap? The bun? The sauce?"></textarea></label>
+  ${social() ? `<label for="r-photo">Add a photo of your dog (it goes on the Photos page too)<input type="file" id="r-photo" accept="image/*"></label>` : ""}
   <div class="actions"><button class="btn primary" type="submit" ${state.pick ? "" : "disabled"}>Post review</button><button class="btn" type="button" data-act="cancelreview">Cancel</button></div>
 </form>`;
 }
+/* ---------- which city is a spot in (OpenStreetMap Nominatim, cached, at most one call a second) ---------- */
+const cityCache = store.get("hd.cities", {});
+let lastCityCall = 0;
+async function cityOf(pt) {
+  const k = `${pt.lat.toFixed(2)},${pt.lng.toFixed(2)}`;
+  if (cityCache[k]) return cityCache[k];
+  const wait = 1100 - (Date.now() - lastCityCall); if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastCityCall = Date.now();
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${pt.lat}&lon=${pt.lng}&accept-language=${encodeURIComponent(navigator.language || "en")}`);
+    const j = await r.json(), a = j.address || {};
+    const city = a.city || a.town || a.village || a.municipality || a.county || a.state || null;
+    if (!city) return null;
+    const out = { city, country: a.country || "", cc: (a.country_code || "").toUpperCase() };
+    cityCache[k] = out; store.set("hd.cities", cityCache); return out;
+  } catch (e) { return null; }
+}
+const flagOf = (cc) => (cc && cc.length === 2 ? String.fromCodePoint(...[...cc].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "🏳️");
+
+/* ---------- Donate a Dog: opens a random small food charity's donate page (we never touch the money) ---------- */
+const CHARITIES = [
+  ["SecondBite", "Australia", "https://secondbite.org/donate/"],
+  ["FareShare", "Australia", "https://www.fareshare.net.au/donate/"],
+  ["Eat Up", "Australia", "https://www.eatup.org.au/donate/"],
+  ["Addison Road Food Pantry", "Australia", "https://addiroad.org.au/donate/"],
+  ["Sikh Volunteers Australia", "Australia", "https://sikhvolunteersaustralia.org/donate/"],
+  ["ASRC Foodbank", "Australia", "https://asrc.org.au/donate/"],
+  ["Kaibosh Food Rescue", "New Zealand", "https://kaibosh.org.nz/get-involved/donate/"],
+  ["KiwiHarvest", "New Zealand", "https://www.kiwiharvest.org.nz/donate/"],
+  ["Fair Food", "New Zealand", "https://givealittle.co.nz/org/fairfood"],
+  ["City Harvest London", "UK", "https://cityharvest.org.uk/donate/"],
+  ["FoodCycle", "UK", "https://foodcycle.org.uk/donate/"],
+  ["The Bread and Butter Thing", "UK", "https://www.breadandbutterthing.org/donate"],
+  ["Social Bite", "UK", "https://www.social-bite.co.uk/donate/"],
+  ["FoodCloud", "Ireland", "https://www.food.cloud/donate"],
+  ["Lasagna Love", "USA", "https://lasagnalove.org/donate/"],
+  ["Community Servings", "USA", "https://www.servings.org/donate/"],
+  ["Project Angel Food", "USA", "https://www.angelfood.org/donations/donate"],
+  ["God's Love We Deliver", "USA", "https://www.glwd.org/donate"],
+  ["Rescuing Leftover Cuisine", "USA", "https://www.rescuingleftovercuisine.org/donate"],
+  ["412 Food Rescue", "USA", "https://412foodrescue.org/donate/"],
+  ["Martha's Table", "USA", "https://marthastable.org/donate/"],
+  ["Food Forward", "USA", "https://www.foodforward.org/donate"],
+  ["Table to Table", "USA", "https://tabletotable.org/donations-to-table-to-table/"],
+  ["DC Central Kitchen", "USA", "https://dccentralkitchen.org/donate/"],
+  ["Lovin' Spoonfuls", "USA", "https://lovinspoonfulsinc.org/donate"],
+  ["Second Helpings Atlanta", "USA", "https://secondhelpingsatlanta.org/donate/"],
+  ["Food Rescue US", "USA", "https://www.foodrescue.us/donate"],
+  ["The Stop Community Food Centre", "Canada", "https://www.thestop.org/donate"],
+  ["Food Stash Foundation", "Canada", "https://www.foodstash.ca/donate"],
+  ["Food from the Heart", "Singapore", "https://www.foodfromtheheart.sg/donate"],
+];
+function donateDog() {
+  const [name, where, url] = CHARITIES[Math.floor(Math.random() * CHARITIES.length)];
+  window.open(url, "_blank", "noopener");
+  toast(`🌭❤️ Today's dog goes to ${name} (${where}). Thank you!`);
+}
+const donateHtml = () => `<div class="donate"><div><b>🍽️ Donate a Dog</b><div class="note">Buy a meal for someone who needs one. Each tap opens a different small food charity's donate page, picked at random. Your money goes straight to them.</div></div><button class="btn eat" data-act="donate">Donate a Dog</button></div>`;
+
 /* ---------- badges ---------- */
 const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
 function bestStreak(eaten) {
@@ -601,8 +661,19 @@ const BADGES = [
   { key: "breakfast", icon: "🌅", name: "Breakfast of Champions", how: "Eat a hotdog before 9am", got: (e) => e.some((x) => new Date(x.t).getHours() < 9 && new Date(x.t).getHours() >= 4) },
   { key: "owl", icon: "🦉", name: "Night Owl", how: "Eat a hotdog after 10pm", got: (e) => e.some((x) => new Date(x.t).getHours() >= 22 || new Date(x.t).getHours() < 4) },
   { key: "special", icon: "🧀", name: "Fancy Frank", how: "Eat at a spot with special dogs", got: (e) => e.some((x) => x.special) },
+  { key: "cities", icon: "🛂", name: "City Hopper", how: "Get dogs in 3 different cities", got: (e) => new Set(e.filter((x) => x.city).map((x) => x.city + x.cc)).size >= 3 },
+  { key: "abroad", icon: "✈️", name: "Dogs Abroad", how: "Get dogs in 2 different countries", got: (e) => new Set(e.filter((x) => x.cc).map((x) => x.cc)).size >= 2 },
 ];
 const earned = (e = state.eaten) => BADGES.filter((b) => b.got(e));
+function passportHtml() {
+  const stamps = {};
+  for (const x of state.eaten) if (x.city) { const k = x.city + "|" + x.cc; (stamps[k] ||= { city: x.city, cc: x.cc, country: x.country, n: 0, first: x.t }).n++; stamps[k].first = Math.min(stamps[k].first, x.t); }
+  const list = Object.values(stamps).sort((a, b) => a.first - b.first);
+  const fmt = (t) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "2-digit" });
+  return `<h2>Dog passport <span class="note">${list.length} cit${list.length === 1 ? "y" : "ies"}</span></h2>
+  ${list.length ? `<div class="passport">${list.map((p, i) => `<div class="stamp" style="--r:${((i * 37) % 13) - 6}deg"><span class="flag" aria-hidden="true">${flagOf(p.cc)}</span><b>${esc(p.city)}</b><span>${esc(p.country || "")}</span><span class="when">${fmt(p.first)} · ${p.n} dog${p.n === 1 ? "" : "s"}</span></div>`).join("")}</div>`
+    : `<p class="note">Tap "I ate one!" at any spot and you'll get a stamp for that city.</p>`}`;
+}
 function badgesHtml() {
   const have = new Set(earned().map((b) => b.key));
   return `<h2>Badges <span class="note">${have.size} of ${BADGES.length}</span></h2>
@@ -645,7 +716,9 @@ function statsView() {
   const recent = state.eaten.slice(-8).reverse().map((e) => `<div class="row"><span class="dot t-${e.type || "stand"}"></span><span class="n">${esc(e.name)}</span><span class="d muted">${ago(e.t)}</span></div>`).join("");
   return `<div class="mycount"><div class="num">${me}</div><div><b>hotdogs eaten</b><div class="note">${week} this week · ${places} different spot${places === 1 ? "" : "s"}</div></div></div>
   ${recent ? `<h2>Your recent dogs</h2><div class="list">${recent}</div>` : `<p class="note">Tap "I ate one!" on any spot to start counting.</p>`}
+  ${passportHtml()}
   ${badgesHtml()}
+  ${donateHtml()}
   <div id="hd-account"></div>
   <div id="hd-leaderboard"><div class="soon"><h2>Global leaderboard</h2><p class="note">${social() ? "Loading…" : OFFLINE_NOTE}</p></div></div>`;
 }
@@ -719,6 +792,7 @@ panel.addEventListener("click", (e) => {
   if (b.dataset.filter) { state.filter = b.dataset.filter; state.selected = null; state.reviewing = false; render(); return; }
   if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; state.editingDogs = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
   if (b.dataset.act === "share") { shareStats(); return; }
+  if (b.dataset.act === "donate") { donateDog(); return; }
   const s = (state.nav && state.nav.spot) || findSpot(state.selected) || visible()[0];
   switch (b.dataset.act) {
     case "retry": loadSpots(); break;
@@ -735,7 +809,9 @@ panel.addEventListener("click", (e) => {
     case "eat": {
       social()?.onEat(s);
       const before = new Set(earned().map((b) => b.key));
-      state.selected = s.id; state.eaten.push({ id: s.id, name: s.name, type: s.type, t: Date.now(), special: specialsOf(s).length > 0 || undefined }); saveAll();
+      const entry = { id: s.id, name: s.name, type: s.type, t: Date.now(), special: specialsOf(s).length > 0 || undefined, lat: s.lat, lng: s.lng };
+      state.selected = s.id; state.eaten.push(entry); saveAll();
+      cityOf(s).then((c) => { if (!c) return; const isNew = !state.eaten.some((x) => x !== entry && x.city === c.city && x.cc === c.cc); Object.assign(entry, c); saveAll(); if (isNew) setTimeout(() => toast(`🛂 New passport stamp: ${c.city}!`), 2600); if (state.tab === "stats") render(); });
       const fresh = earned().filter((b) => !before.has(b.key));
       toast(fresh.length ? `${fresh[0].icon} Badge unlocked: ${fresh[0].name}!` : `Hot dang! That's hotdog #${state.eaten.length}`); render();
       const c = $("#counter"); c.classList.remove("bump"); void c.offsetWidth; c.classList.add("bump"); break;
@@ -751,6 +827,8 @@ panel.addEventListener("submit", async (e) => {
     if (!state.pick || !s) return;
     (state.reviews[s.id] ||= []).push({ stars: state.pick, text: $("#r-text").value.trim() || "No words, just vibes.", t: Date.now() });
     social()?.onReview(s, state.pick, $("#r-text").value.trim());
+    const rphoto = $("#r-photo")?.files?.[0];
+    if (rphoto && social()) social().postPhoto(s, rphoto, $("#r-text").value.trim());
     state.reviewing = false; saveAll(); toast("Review posted"); render(); return;
   }
   if (!state.draft) return;

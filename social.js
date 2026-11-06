@@ -99,7 +99,8 @@
     return `<article class="post" data-post="${p.id}">
       <img class="post-img" src="${esc(photoUrl(p.photo_path))}" alt="${esc(p.caption || "Hotdog photo")}" loading="lazy">
       <div class="post-body">
-        <div class="meta"><b style="color:var(--ink)">${esc(p.username)}</b><span>${ago(new Date(p.created_at).getTime())}</span>${showSpot ? `<button class="linkish" data-soc="openspot" data-spot="${esc(p.spot_id)}">${esc(p.spot_name || "a hotdog spot")}</button>` : ""}</div>
+        <div class="meta"><b style="color:var(--ink)">${esc(p.username)}</b><span>${ago(new Date(p.created_at).getTime())}</span></div>
+        ${showSpot ? `<div class="post-place">📍 <button class="linkish" data-soc="openspot" data-spot="${esc(p.spot_id)}"${p.lat != null ? ` data-lat="${p.lat}" data-lng="${p.lng}"` : ""}>${esc(p.spot_name || "a hotdog spot")}</button>${p.city ? `<span>${esc(p.city)}</span>` : ""}</div>` : ""}
         ${p.caption ? `<p class="caption">${esc(p.caption)}</p>` : ""}
         <div class="actions votes">
           <button class="vote ${mine === 1 ? "on" : ""}" data-soc="vote" data-v="1" aria-pressed="${mine === 1}" aria-label="Like">👍 <span>${p.likes}</span></button>
@@ -132,7 +133,10 @@
     const path = `${me.user.id}/${Date.now()}.jpg`;
     const up = await sb.storage.from("photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
     if (up.error) { toast(`Upload failed: ${up.error.message}`); return; }
-    const { error } = await sb.from("posts").insert({ spot_id: spot.id, spot_name: spot.name, photo_path: path, caption: caption || null });
+    const row = { spot_id: spot.id, spot_name: spot.name, photo_path: path, caption: caption || null };
+    const place = typeof cityOf === "function" ? await cityOf(spot).catch(() => null) : null;
+    let { error } = await sb.from("posts").insert({ ...row, city: place ? `${place.city}${place.country ? ", " + place.country : ""}` : null, lat: spot.lat, lng: spot.lng });
+    if (error && /city|lat|lng|column/i.test(error.message)) ({ error } = await sb.from("posts").insert(row)); // database not updated yet
     if (error) { toast(`Couldn't post: ${error.message}`); return; }
     delete cache.photos[spot.id]; toast("Photo posted!"); render();
   }
@@ -267,7 +271,15 @@
       case "delpost": deletePost(pid); break;
       case "unbury": shown.add(pid); refreshVisiblePostsSoon(); break;
       case "cancelupload": document.getElementById("hd-upload")?.reset(); document.getElementById("hd-upload-more").hidden = true; break;
-      case "openspot": { const s = findSpot(b.dataset.spot); if (s) { state.tab = "spots"; state.selected = s.id; map.panTo([s.lat, s.lng]); render(); } else toast("That spot isn't near you"); break; }
+      case "openspot": {
+        const s = findSpot(b.dataset.spot);
+        if (s) { state.tab = "spots"; state.selected = s.id; map.panTo([s.lat, s.lng]); render(); }
+        else if (b.dataset.lat) { // a dog somewhere else: go there and look around
+          const pt = { lat: +b.dataset.lat, lng: +b.dataset.lng };
+          if (typeof flyToPlace === "function") flyToPlace(pt, b.textContent);
+        } else toast("That spot isn't near you");
+        break;
+      }
     }
   });
   let soonTimer;
@@ -315,6 +327,7 @@
     },
     onSpotsLoaded() { loadSharedDogs(); loadCommunitySpots(); },
     onAddSpot: addSpot,
+    postPhoto(spot, file, caption) { return uploadPhoto(spot, file, caption); },
   };
 
   // supabase-js can deadlock if other calls are awaited inside this callback, so defer the work
