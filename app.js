@@ -850,6 +850,7 @@ function shrink(file) {
   });
 }
 function startAdd() { state.mode = "add"; state.draft = null; state.tab = "spots"; render(); }
+$("#donateBtn").addEventListener("click", donateDog);
 $("#counter").addEventListener("click", () => { state.tab = "stats"; state.mode = "browse"; state.draft = null; render(); showPanel(); });
 // on phones the panel sits below the map, so bring it into view
 function showPanel() { const p = $(".panel"); if (p && p.getBoundingClientRect().top > innerHeight * 0.6) p.scrollIntoView({ behavior: "smooth", block: "start" }); }
