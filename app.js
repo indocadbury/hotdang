@@ -183,7 +183,7 @@ async function overpass(q) {
   let lastErr;
   for (const url of OVERPASS) {
     try {
-      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 30000);
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 12000);
       const res = await fetch(url, { method: "POST", body: new URLSearchParams({ data: q }), signal: ctl.signal });
       clearTimeout(timer);
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -192,25 +192,68 @@ async function overpass(q) {
   }
   throw lastErr;
 }
+/* Spot data comes from two places:
+ *  1. Our own files (data/spots/<lat>_<lng>.json, one per 1° square), built monthly from
+ *     Overture Maps open places data by .github/workflows/data.yml. Fast and always there.
+ *  2. OpenStreetMap via Overpass, as a bonus (opening hours, street vendors). Those public
+ *     servers are often overloaded, so this is best-effort with a short timeout. */
+const cellCache = {};
+async function loadCell(la, lo) {
+  const k = `${la}_${lo}`;
+  if (!cellCache[k]) cellCache[k] = fetch(`data/spots/${k}.json`).then((r) => (r.ok ? r.json() : { s: [] })).catch(() => null);
+  return cellCache[k];
+}
+const OWN_TYPES = { r: ["restaurant", "Hotdogs", false], v: ["stand", "Hotdogs", false], c: ["shelf", "Roller-grill hotdog", true], f: ["restaurant", "Food court hotdog", true] };
+async function ownSpots(c, r) {
+  const dLat = r / 111000, dLng = r / (111000 * Math.max(0.1, Math.cos((c.lat * Math.PI) / 180)));
+  const cells = [];
+  for (let la = Math.floor(c.lat - dLat); la <= Math.floor(c.lat + dLat); la++)
+    for (let lo = Math.floor(c.lng - dLng); lo <= Math.floor(c.lng + dLng); lo++) cells.push(loadCell(la, ((lo + 180) % 360 + 360) % 360 - 180));
+  const got = await Promise.all(cells);
+  if (got.every((g) => g === null)) throw new Error("own data unreachable");
+  const out = [];
+  for (const g of got) for (const [lat, lng, name, t, id] of (g && g.s) || []) {
+    if (metres(c, { lat, lng }) > r) continue;
+    const [type, item, likely] = OWN_TYPES[t] || OWN_TYPES.r;
+    const osmSpecials = SPECIALS.filter((x) => x.re.test(name)).map((x) => x.key);
+    out.push({ id: `ov:${id}`, src: "overture", lat, lng, name, type, item, likely, osmSpecials, hoursRaw: null });
+  }
+  return out;
+}
+async function overpassSpots(c, r) {
+  const key = `hd.q.${c.lat.toFixed(2)},${c.lng.toFixed(2)},${r}`;
+  let data; try { data = JSON.parse(sessionStorage.getItem(key)); } catch (e) {}
+  if (!data) { data = await overpass(overpassQuery(c, r)); try { sessionStorage.setItem(key, JSON.stringify(data)); } catch (e) {} }
+  const seenIds = new Set();
+  return (data.elements || []).map(classify).filter((s) => s && !seenIds.has(s.id) && seenIds.add(s.id));
+}
+const normName = (n) => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function mergeSpots(own, osm) {
+  // prefer the OpenStreetMap copy of a place (it has opening hours); drop our copy if it's the same place
+  const keep = own.filter((o) => !osm.some((s) => metres(o, s) < 80 && (normName(o.name) === normName(s.name) || o.type === s.type && metres(o, s) < 25)));
+  return [...osm, ...keep];
+}
+let loadSeq = 0;
 async function loadSpots() {
   if (!state.me) return;
+  const seq = ++loadSeq, c = { ...state.me };
   state.loading = true; state.error = null; render();
+  let own = [], ownOk = true;
   try {
-    let found = [];
-    for (const r of [3000, 10000, 30000]) {
-      const key = `hd.q.${state.me.lat.toFixed(2)},${state.me.lng.toFixed(2)},${r}`;
-      let data; try { data = JSON.parse(sessionStorage.getItem(key)); } catch (e) {}
-      if (!data) { data = await overpass(overpassQuery(state.me, r)); try { sessionStorage.setItem(key, JSON.stringify(data)); } catch (e) {} }
-      const seenIds = new Set();
-      found = (data.elements || []).map(classify).filter((s) => s && !seenIds.has(s.id) && seenIds.add(s.id));
-      state.searchedRadius = r;
-      if (found.length >= 5) break;
-    }
-    state.spots = found;
-  } catch (e) {
-    state.error = "Couldn't reach the map data right now. Check your connection and try again.";
-  }
-  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink(); try { social()?.onSpotsLoaded(); } catch (e) { console.error(e); }
+    for (const r of [3000, 10000, 30000]) { own = await ownSpots(c, r); state.searchedRadius = r; if (own.length >= 5) break; }
+  } catch (e) { ownOk = false; }
+  if (seq !== loadSeq) return;
+  state.spots = own;
+  state.loading = !ownOk; // keep the "sniffing" card only if we have nothing yet
+  state.lastLoad = c; render(); if (!state.nav && own.length) fitToNearest(); checkAlerts(); openFromLink(); try { social()?.onSpotsLoaded(); } catch (e) { console.error(e); }
+  // bonus: OpenStreetMap, within the same radius, short timeout
+  let osm = null;
+  try { osm = await Promise.race([overpassSpots(c, Math.min(state.searchedRadius || 3000, 10000)), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 15000))]); } catch (e) {}
+  if (seq !== loadSeq) return;
+  if (osm && osm.length) state.spots = mergeSpots(own, osm);
+  state.loading = false;
+  if (!ownOk && !osm) state.error = "Couldn't reach the map data right now. Check your connection and try again.";
+  render(); if (!state.nav && !own.length && state.spots.length) fitToNearest(); checkAlerts(); openFromLink(); try { social()?.onSpotsLoaded(); } catch (e) { console.error(e); }
 }
 
 /* ---------- map ---------- */
@@ -487,7 +530,7 @@ function spotCard(s, heading) {
   ${state.reviewing ? reviewForm() : `<div><button class="btn" data-act="review">Write a review</button></div>`}
   <div id="hd-reviews" data-spot="${esc(s.id)}"></div>
   <div class="reviews">${reviews.length ? reviews.map((rv) => `<div class="review"><div class="who">You <span class="stars">${starStr(rv.stars)}</span><span class="note">${ago(rv.t)}</span></div><p>${esc(rv.text)}</p></div>`).join("") : `<p class="note">No reviews yet. Be the first.</p>`}</div>
-  ${s.osm ? `<p class="note">Spot from <a href="${s.osm}" target="_blank" rel="noopener">OpenStreetMap</a>. Wrong? You can fix it there.</p>` : ""}`;
+  ${s.osm ? `<p class="note">Spot from <a href="${s.osm}" target="_blank" rel="noopener">OpenStreetMap</a>. Wrong? You can fix it there.</p>` : ""}${s.src === "overture" ? `<p class="note">Spot from <a href="https://overturemaps.org" target="_blank" rel="noopener">Overture Maps</a> open data.</p>` : ""}`;
 }
 function dogsSection(s) {
   const have = new Set(specialsOf(s).map((x) => x.key));
@@ -675,10 +718,10 @@ searchForm.addEventListener("submit", async (e) => {
 searchResults.addEventListener("click", (e) => {
   const b = e.target.closest("[data-place]"); if (!b) return;
   const p = places[+b.dataset.place]; if (!p) return;
-  goTo({ lat: +p.lat, lng: +p.lon }, p.name || p.display_name.split(",")[0]);
+  flyToPlace({ lat: +p.lat, lng: +p.lon }, p.name || p.display_name.split(",")[0]);
   openSearch(false); searchInput.value = "";
 });
-function goTo(pt, label) {
+function flyToPlace(pt, label) {
   // looking somewhere else: stop following GPS until "Find me" is tapped
   if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   state.me = pt; state.gps = false; state.mode = "browse"; state.tab = "spots"; state.selected = null; state.nav = null;
