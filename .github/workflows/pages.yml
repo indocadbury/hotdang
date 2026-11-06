@@ -22,6 +22,16 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Add hotdog spot data (built by data.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download spots-data --pattern spots.tar.gz --dir /tmp 2>/dev/null; then
+            tar -xzf /tmp/spots.tar.gz -C .
+            cat data/spots/index.json
+          else
+            echo "No spot data yet; the app will fall back to OpenStreetMap"
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

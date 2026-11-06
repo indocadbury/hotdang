@@ -1,0 +1,46 @@
+name: Build hotdog spot data
+
+# Builds data/spots/*.json from Overture Maps open places data and stores it as
+# the "spots-data" release asset, which the Pages deploy unpacks into the site.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 2 * *"   # monthly, after Overture's monthly release
+  push:
+    branches: [feat/own-data]
+    paths: [scripts/build_spots.py, .github/workflows/data.yml]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: spots-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install duckdb==1.2.2
+      - run: python3 scripts/build_spots.py out/data/spots
+      - name: Package
+        run: |
+          tar -czf spots.tar.gz -C out data
+          ls -la spots.tar.gz
+          cat out/data/spots/index.json
+      - name: Upload as release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view spots-data >/dev/null 2>&1 || gh release create spots-data --title "Hotdog spot data" --notes "Built automatically from Overture Maps open places data (CDLA-Permissive-2.0). Used by the GitHub Pages deploy." --latest=false
+          gh release upload spots-data spots.tar.gz --clobber
+      - name: Redeploy the site with the new data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main
