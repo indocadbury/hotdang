@@ -7,6 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install duckdb==1.1.3
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install duckdb==1.2.2
       - run: aws s3 ls --no-sign-request s3://overturemaps-us-west-2/release/ | tail -5
       - run: python3 .github/diag.py
