@@ -63,7 +63,7 @@ function metres(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 const dist = (s) => (state.me ? metres(state.me, s) : 0);
-const fmtDist = (m) => (m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1000).toFixed(m < 10000 ? 1 : 0) + " km");
+const fmtDist = (m) => (m < 1000 ? Math.round(m / 10) * 10 + " m" : m < 10000 ? (m / 1000).toFixed(1) + " km" : Math.round(m / 1000).toLocaleString() + " km");
 const mins = (m) => Math.max(1, Math.round(m / WALK_M_PER_MIN));
 function ago(t) { const h = (Date.now() - t) / 3600e3; if (h < 1) return "just now"; if (h < 24) return Math.round(h) + "h ago"; return Math.round(h / 24) + "d ago"; }
 const starStr = (v) => { const f = Math.round(v); return "★★★★★".slice(0, f) + "☆☆☆☆☆".slice(0, 5 - f); };
@@ -233,6 +233,35 @@ function mergeSpots(own, osm) {
   const keep = own.filter((o) => !osm.some((s) => metres(o, s) < 80 && (normName(o.name) === normName(s.name) || o.type === s.type && metres(o, s) < 25)));
   return [...osm, ...keep];
 }
+/* Nothing within 30 km (rural areas): keep looking outward, square by square, until we find the closest dog. */
+let cellIndex;
+const loadIndex = () => (cellIndex ||= fetch("data/spots/index.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
+async function farSpots(c) {
+  const idx = await loadIndex();
+  const cosLat = Math.max(0.05, Math.cos((c.lat * Math.PI) / 180));
+  // rough distance (m) from c to the nearest edge of a 1-degree square
+  const cellGap = (la, lo) => {
+    const dy = c.lat < la ? la - c.lat : c.lat > la + 1 ? c.lat - la - 1 : 0;
+    let dxDeg = c.lng < lo ? lo - c.lng : c.lng > lo + 1 ? c.lng - lo - 1 : 0; dxDeg = Math.min(dxDeg, 360 - dxDeg);
+    return Math.hypot(dy * 111000, dxDeg * 111000 * cosLat * 0.9);
+  };
+  let keys = (idx.keys || []).map((k) => k.split("_").map(Number));
+  if (!keys.length) { // older data without a key list: probe the squares around us
+    for (let la = Math.floor(c.lat) - 4; la <= Math.floor(c.lat) + 4; la++) for (let lo = Math.floor(c.lng) - 4; lo <= Math.floor(c.lng) + 4; lo++) keys.push([la, lo]);
+  }
+  keys = keys.map(([la, lo]) => ({ la, lo, gap: cellGap(la, lo) })).sort((a, b) => a.gap - b.gap);
+  let found = [], best = Infinity;
+  for (let i = 0; i < keys.length && keys[i].gap < best && i < 400; i += 6) {
+    const batch = keys.slice(i, i + 6).filter((k) => k.gap < best);
+    const got = await Promise.all(batch.map((k) => loadCell(k.la, k.lo)));
+    for (const g of got) for (const [lat, lng, name, t, id] of (g && g.s) || []) {
+      const [type, item, likely] = OWN_TYPES[t] || OWN_TYPES.r;
+      found.push({ id: `ov:${id}`, src: "overture", lat, lng, name, type, item, likely, osmSpecials: SPECIALS.filter((x) => x.re.test(name)).map((x) => x.key), hoursRaw: null });
+    }
+    if (found.length) { found.sort((a, b) => metres(c, a) - metres(c, b)); found = found.slice(0, 20); best = metres(c, found[0]); }
+  }
+  return found;
+}
 let loadSeq = 0;
 async function loadSpots() {
   if (!state.me) return;
@@ -241,6 +270,7 @@ async function loadSpots() {
   let own = [], ownOk = true;
   try {
     for (const r of [3000, 10000, 30000]) { own = await ownSpots(c, r); state.searchedRadius = r; if (own.length >= 5) break; }
+    if (!own.length) { own = await farSpots(c); if (own.length) state.searchedRadius = metres(c, own[own.length - 1]); }
   } catch (e) { ownOk = false; }
   if (seq !== loadSeq) return;
   state.spots = own;
@@ -710,10 +740,10 @@ function showDogPop(n) {
       <div class="dogpop-spot">
         <div class="meta"><span class="dot t-${n.type}"></span>${TYPES[n.type]} · ${esc(n.item)}</div>
         <div class="name">${esc(n.name)} ${statusTag(n)}</div>
-        <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : "away"}</span></div>
+        <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : "away. Road trip!"}</span></div>
         ${sp.length ? `<div class="dogs">${sp.map((x) => `<span class="dogchip">${x.label}</span>`).join("")}</div>` : ""}
       </div>
-      <div class="actions"><button class="btn eat" data-pop="go">Take me there</button><button class="btn" data-pop="info">More info</button></div>`;
+      <div class="actions"><button class="btn eat" data-pop="go">${m > 5000 ? "Drive there" : "Take me there"}</button><button class="btn" data-pop="info">More info</button></div>`;
   }
   $("#dogpop").hidden = false;
   setTimeout(() => $("#dogpop .btn")?.focus(), 50);
@@ -725,7 +755,10 @@ $("#dogpop").addEventListener("click", (e) => {
   const b = e.target.closest("[data-pop]"); if (!b) return;
   const n = findSpot(state.selected);
   closeDogPop();
-  if (b.dataset.pop === "go" && n) { startNav(n); showPanel(); }
+  if (b.dataset.pop === "go" && n) {
+    if (dist(n) > 5000) window.open(mapsUrl(n).replace("travelmode=walking", "travelmode=driving"), "_blank", "noopener"); // too far to walk
+    else { startNav(n); showPanel(); }
+  }
   else if (b.dataset.pop === "info") showPanel();
   else if (b.dataset.pop === "search") $("#searchBtn").click();
   else if (b.dataset.pop === "add") $("#addBtn").click();

@@ -70,5 +70,5 @@ for key, spots in cells.items():
     with open(os.path.join(OUT, key + ".json"), "w") as fh:
         json.dump({"v": rel, "s": spots}, fh, ensure_ascii=False, separators=(",", ":"))
 with open(os.path.join(OUT, "index.json"), "w") as fh:
-    json.dump({"v": rel, "built": time.strftime("%Y-%m-%d"), "cells": len(cells), "spots": sum(map(len, cells.values())), "kinds": kinds}, fh)
+    json.dump({"v": rel, "built": time.strftime("%Y-%m-%d"), "cells": len(cells), "spots": sum(map(len, cells.values())), "kinds": kinds, "keys": sorted(cells)}, fh)
 print(f"wrote {len(cells)} cells, {sum(map(len, cells.values()))} spots, kinds {kinds}, {round(time.time() - t0)}s")
