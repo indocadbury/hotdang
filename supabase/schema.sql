@@ -126,3 +126,10 @@ create policy "photos upload own" on storage.objects for insert to authenticated
 drop policy if exists "photos delete own" on storage.objects;
 create policy "photos delete own" on storage.objects for delete to authenticated
   using (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Explicit API access (works whether or not "Automatically expose new tables" was ticked).
+-- Row level security above still decides which rows each person can read or change.
+grant usage on schema public to anon, authenticated;
+grant select on all tables in schema public to anon, authenticated;
+grant insert, update, delete on public.profiles, public.eats, public.posts, public.post_votes,
+  public.post_comments, public.reviews, public.spot_dogs, public.spots to authenticated;
