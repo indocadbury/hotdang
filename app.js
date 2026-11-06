@@ -19,7 +19,11 @@ const OVERPASS = [
 ];
 const SHELF_BRANDS = "7-Eleven|Circle K|Wawa|Sheetz|QuikTrip|Speedway|Casey's|Kwik Trip|Holiday|OXXO|FamilyMart|Lawson";
 const FOOD_COURT_BRANDS = "Costco|IKEA";
-const TYPES = { stand: "Street vendor", restaurant: "Restaurant", shelf: "Shelf" };
+const TYPES = { stand: "Street vendor", restaurant: "Restaurant", shelf: "Convenience store" };
+const ALERT_M = 400;           // "within walking distance" for alerts
+const ALERT_REPEAT_MS = 6 * 3600e3; // don't re-alert the same spot for 6 hours
+const ARRIVE_M = 30;
+const ROUTER = "https://routing.openstreetmap.de/routed-foot/route/v1/foot";
 
 /* ---------- storage (this device only, for now) ---------- */
 const store = {
@@ -36,6 +40,11 @@ const state = {
   reviews: store.get("hd.reviews", {}), // {spotId: [{stars, text, t}]}
   seen: store.get("hd.seen", {}),       // {spotId: time}
   mine: store.get("hd.mine", []),       // spots you added
+  alerts: store.get("hd.alerts", false),
+  alerted: store.get("hd.alerted", {}),
+  nav: null,       // {spot, coords, steps, total, idx, arrived, straight}
+  follow: true,    // map follows you while navigating
+  lastLoad: null,  // where spots were last loaded
 };
 const saveAll = () => { store.set("hd.eaten", state.eaten); store.set("hd.reviews", state.reviews); store.set("hd.seen", state.seen); store.set("hd.mine", state.mine); };
 
@@ -61,6 +70,61 @@ const mapsUrl = (s) => `https://www.google.com/maps/dir/?api=1${state.me ? `&ori
 let toastTimer;
 function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2400); }
 
+/* ---------- opening hours ----------
+ * A small parser for the common OpenStreetMap opening_hours formats, e.g.
+ * "24/7", "Mo-Fr 08:00-20:00; Sa 09:00-14:00", "Mo-Su 18:00-02:00", "Su off".
+ * Anything it can't read safely (holidays, sunrise, months...) is "unknown".
+ */
+const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+function parseHours(str) {
+  if (!str) return null;
+  const s = str.trim();
+  if (/^24\/7$/.test(s)) return "24/7";
+  const rules = [];
+  for (const part of s.split(";").map((x) => x.trim()).filter(Boolean)) {
+    const m = part.match(/^((?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?(?:,(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)*)?\s*(.*)$/);
+    if (!m) return null;
+    const days = new Set();
+    if (!m[1]) DAYS.forEach((_, i) => days.add(i));
+    else for (const d of m[1].split(",")) {
+      const [a, b] = d.split("-").map((x) => DAYS.indexOf(x));
+      if (b === undefined) days.add(a); else for (let i = a; ; i = (i + 1) % 7) { days.add(i); if (i === b) break; }
+    }
+    const rest = m[2].trim();
+    if (/^(off|closed)$/i.test(rest)) { rules.push({ days, ranges: [] }); continue; }
+    const ranges = [];
+    for (const r of rest.split(",").map((x) => x.trim())) {
+      const tm = r.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})\+?$/);
+      if (!tm) return null;
+      ranges.push([+tm[1] * 60 + +tm[2], +tm[3] * 60 + +tm[4]]);
+    }
+    rules.push({ days, ranges });
+  }
+  return rules.length ? rules : null;
+}
+const hhmm = (mins) => `${String(Math.floor(mins / 60) % 24).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+function openStatus(str, now = new Date()) {
+  const rules = parseHours(str);
+  if (!rules) return { state: "unknown" };
+  if (rules === "24/7") return { state: "open", label: "Open 24/7" };
+  // later rules override earlier ones for the days they name (OSM semantics)
+  const forDay = (d) => { let r = null; for (const rule of rules) if (rule.days.has(d)) r = rule.ranges; return r; };
+  const day = now.getDay(), t = now.getHours() * 60 + now.getMinutes();
+  const today = forDay(day) || [], yesterday = forDay((day + 6) % 7) || [];
+  for (const [a, b] of yesterday) if (b <= a && t < b) return { state: "open", label: `Open until ${hhmm(b)}` };
+  for (const [a, b] of today) {
+    if (b > a ? t >= a && t < b : t >= a) return { state: "open", label: `Open until ${hhmm(b)}`, soon: b > a && b - t <= 30 };
+  }
+  const next = today.map(([a]) => a).filter((a) => a > t).sort((x, y) => x - y)[0];
+  return { state: "closed", label: next != null ? `Closed · opens ${hhmm(next)}` : "Closed now" };
+}
+function statusOf(s) {
+  if (s.hoursRaw == null) return { state: "unknown", label: "Hours unknown" };
+  const st = openStatus(s.hoursRaw);
+  return st.state === "unknown" ? { state: "unknown", label: "Hours unknown" } : st;
+}
+const statusTag = (s) => { const st = statusOf(s); return `<span class="ohtag oh-${st.state}${st.soon ? " oh-soon" : ""}">${st.state === "open" ? (st.soon ? "Closing soon" : "Open") : st.state === "closed" ? "Closed" : "Hours?"}</span>`; };
+
 /* ---------- OpenStreetMap data ---------- */
 function overpassQuery({ lat, lng }, r) {
   const around = `(around:${r},${lat},${lng})`;
@@ -79,7 +143,7 @@ function classify(el) {
   const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon;
   if (lat == null) return null;
   const brand = t.brand || "";
-  const base = { id: `osm:${el.type}/${el.id}`, lat, lng, src: "osm", osm: `https://www.openstreetmap.org/${el.type}/${el.id}` };
+  const base = { id: `osm:${el.type}/${el.id}`, lat, lng, src: "osm", osm: `https://www.openstreetmap.org/${el.type}/${el.id}`, hoursRaw: t.opening_hours || null };
   if (new RegExp(`^(${FOOD_COURT_BRANDS})$`, "i").test(brand)) {
     return { ...base, type: "restaurant", name: t.name || brand, item: "Food court hotdog", likely: true };
   }
@@ -121,7 +185,7 @@ async function loadSpots() {
   } catch (e) {
     state.error = "Couldn't reach the map data right now. Check your connection and try again.";
   }
-  state.loading = false; render(); fitToNearest();
+  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink();
 }
 
 /* ---------- map ---------- */
@@ -161,11 +225,11 @@ const pupSvg = () => {
 };
 
 const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([DEFAULT_CENTRE.lat, DEFAULT_CENTRE.lng], 15);
-// Map tiles: no API key needed. OpenStreetMap first, with key-free fallbacks if a server fails.
+// Map tiles: no API key needed. OpenStreetMap first, then OSM France (HOT style) if it fails.
+// (CARTO basemaps now require an API key, so they are not used.)
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const TILE_SOURCES = [
   { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", opts: { maxZoom: 19, attribution: OSM_ATTR } },
-  { url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", opts: { maxZoom: 20, subdomains: "abcd", attribution: OSM_ATTR + ' &copy; <a href="https://carto.com/attributions">CARTO</a>' } },
   { url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", opts: { maxZoom: 19, subdomains: "abc", attribution: OSM_ATTR + ", tiles by HOT" } },
 ];
 let tileIdx = 0, tiles = null;
@@ -193,7 +257,12 @@ function drawMap() {
   });
   if (line) { line.remove(); line = null; }
   const sel = state.selected && findSpot(state.selected);
-  if (sel && state.me) line = L.polyline([[state.me.lat, state.me.lng], [sel.lat, sel.lng]], { color: "#2563eb", weight: 4, dashArray: "2 10", lineCap: "round" }).addTo(map);
+  if (state.nav) {
+    line = L.layerGroup([
+      L.polyline(state.nav.coords, { color: "#ffffff", weight: 10, opacity: 0.9, lineCap: "round", lineJoin: "round" }),
+      L.polyline(state.nav.coords, { color: "#2563eb", weight: 6, lineCap: "round", lineJoin: "round", dashArray: state.nav.straight ? "2 12" : null }),
+    ]).addTo(map);
+  } else if (sel && state.me) line = L.polyline([[state.me.lat, state.me.lng], [sel.lat, sel.lng]], { color: "#2563eb", weight: 4, dashArray: "2 10", lineCap: "round" }).addTo(map);
   if (state.me) {
     if (!meMarker) meMarker = L.marker([state.me.lat, state.me.lng], { icon: L.divIcon({ className: "hd-pup", html: pupSvg(), iconSize: [96, 96], iconAnchor: [48, 48] }), zIndexOffset: 2000, interactive: false, keyboard: false }).addTo(map);
     else meMarker.setLatLng([state.me.lat, state.me.lng]);
@@ -219,12 +288,144 @@ function locate(first) {
   if (!navigator.geolocation) { if (first) useFallback(); return; }
   if (!first) toast("Finding you…");
   navigator.geolocation.getCurrentPosition(
-    (p) => { state.me = { lat: p.coords.latitude, lng: p.coords.longitude }; state.gps = true; map.setView([state.me.lat, state.me.lng], 16); render(); loadSpots(); },
+    (p) => { state.me = { lat: p.coords.latitude, lng: p.coords.longitude }; state.gps = true; map.setView([state.me.lat, state.me.lng], 16); render(); loadSpots(); watch(); },
     () => { if (first) useFallback(); else toast("Location is off. Tap Move me and then the map instead."); },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
   );
 }
+let watchId = null, lastPanelRender = 0;
+function watch() {
+  if (watchId != null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition(onPosition, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+}
+function onPosition(p) {
+  state.me = { lat: p.coords.latitude, lng: p.coords.longitude }; state.gps = true;
+  if (state.lastLoad && metres(state.lastLoad, state.me) > 1500 && !state.loading) loadSpots();
+  if (state.nav) { updateNav(); if (state.follow) map.panTo([state.me.lat, state.me.lng], { animate: true }); }
+  checkAlerts();
+  // Keep typing safe: only redraw the map while a form is open.
+  if (state.reviewing || state.mode !== "browse") { drawMap(); return; }
+  if (state.nav || Date.now() - lastPanelRender > 5000) { lastPanelRender = Date.now(); render(); } else drawMap();
+}
 function useFallback() { state.me = { ...DEFAULT_CENTRE }; state.gps = false; render(); loadSpots(); toast("Showing Sydney. Tap Move me to set where you are."); }
+
+/* ---------- walking directions (in the app) ---------- */
+const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+function stepText(s) {
+  const m = s.maneuver, onto = s.name ? ` onto ${s.name}` : "";
+  if (m.type === "depart") return `Head ${COMPASS[Math.round((m.bearing_after || 0) / 45) % 8]}${s.name ? ` on ${s.name}` : ""}`;
+  if (m.type === "arrive") return "Arrive at the hotdog";
+  const mod = m.modifier || "";
+  if (mod === "uturn") return "Turn around";
+  if (/left|right/.test(mod)) return `${mod.startsWith("slight") ? "Bear" : "Turn"} ${mod.replace(/^(slight|sharp) /, "")}${onto}`;
+  return `Continue${onto}`;
+}
+async function getRoute(from, to) {
+  try {
+    const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 12000);
+    const res = await fetch(`${ROUTER}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`, { signal: ctl.signal });
+    clearTimeout(timer);
+    const j = await res.json(); const r = j.routes && j.routes[0];
+    if (!r) throw new Error("no route");
+    return {
+      coords: r.geometry.coordinates.map(([x, y]) => [y, x]), total: r.distance, straight: false,
+      steps: r.legs[0].steps.map((s) => ({ text: stepText(s), at: { lat: s.maneuver.location[1], lng: s.maneuver.location[0] } })),
+    };
+  } catch (e) {
+    return { coords: [[from.lat, from.lng], [to.lat, to.lng]], total: metres(from, to), straight: true, steps: [{ text: `Head towards ${to.name}`, at: from }, { text: "Arrive at the hotdog", at: to }] };
+  }
+}
+async function startNav(s) {
+  if (!state.me) { toast("Tap Find me first so we know where you are"); return; }
+  state.selected = s.id; state.reviewing = false; state.tab = "spots"; state.follow = true;
+  toast("Plotting your walk…");
+  const r = await getRoute(state.me, s);
+  state.nav = { spot: s, ...r, idx: 0, arrived: false };
+  if (!state.gps) toast("Tip: tap Find me so the map can follow you as you walk");
+  watch();
+  map.fitBounds(state.nav.coords, { padding: [60, 60], maxZoom: 18 });
+  updateNav(); render();
+}
+function stopNav() { state.nav = null; render(); }
+function updateNav() {
+  const n = state.nav; if (!n || !state.me) return;
+  // advance past steps we've reached
+  while (n.idx + 1 < n.steps.length && metres(state.me, n.steps[n.idx + 1].at) < 20) n.idx++;
+  // remaining distance along the route from the closest point
+  let best = 0, bestD = Infinity;
+  n.coords.forEach((c, i) => { const d = metres(state.me, { lat: c[0], lng: c[1] }); if (d < bestD) { bestD = d; best = i; } });
+  let rem = bestD;
+  for (let i = best; i < n.coords.length - 1; i++) rem += metres({ lat: n.coords[i][0], lng: n.coords[i][1] }, { lat: n.coords[i + 1][0], lng: n.coords[i + 1][1] });
+  n.remaining = rem;
+  if (!n.arrived && metres(state.me, n.spot) <= ARRIVE_M) { n.arrived = true; toast("You made it! Enjoy that hotdog"); if (navigator.vibrate) navigator.vibrate([120, 60, 120]); }
+}
+function navCard() {
+  const n = state.nav, s = n.spot;
+  const rem = n.remaining ?? n.total;
+  const next = n.steps[Math.min(n.idx + 1, n.steps.length - 1)];
+  if (n.arrived) return `<div class="result nav">
+    <div class="meta">You made it to</div><div class="name">${esc(s.name)}</div>
+    <p class="note" style="color:var(--ink)">Grab your hotdog, then log it.</p>
+    <div class="actions"><button class="btn eat" data-act="eat">I ate one!</button><button class="btn" data-act="stopnav">Done</button></div></div>`;
+  return `<div class="result nav">
+    <div class="meta">Walking to</div>
+    <div class="name">${esc(s.name)}</div>
+    <div class="meta"><span class="big">${fmtDist(rem)}</span><span>${mins(rem)} min left</span></div>
+    <div class="nextstep"><span class="arrow" aria-hidden="true">${arrowFor(next.text)}</span><span>${esc(next.text)}</span></div>
+    ${n.straight ? `<p class="note">Couldn't load street directions, so this is a straight line. Follow the streets towards the pin.</p>` : ""}
+    <div class="actions">
+      ${state.follow ? "" : `<button class="btn" data-act="recenter">Follow me</button>`}
+      <button class="btn" data-act="stopnav">Stop</button>
+    </div>
+  </div>
+  <h2>Steps</h2>
+  <ol class="steps">${n.steps.map((st, i) => `<li class="${i <= n.idx ? "done" : ""}">${esc(st.text)}</li>`).join("")}</ol>
+  <p class="note">Prefer Google Maps? <a href="${mapsUrl(s)}" target="_blank" rel="noopener">Open this walk there</a>.</p>`;
+}
+const arrowFor = (t) => (/left/i.test(t) ? "⬅" : /right/i.test(t) ? "➡" : /around/i.test(t) ? "⤾" : /Arrive/.test(t) ? "★" : "⬆");
+map.on("dragstart", () => { if (state.nav && state.follow) { state.follow = false; render(); } });
+
+/* ---------- hotdog alerts ---------- */
+async function enableAlerts() {
+  if (!("Notification" in window)) {
+    toast(/iPhone|iPad/.test(navigator.userAgent) ? "On iPhone, add HotDang to your Home Screen first, then turn alerts on there" : "This browser can't show alerts");
+    return;
+  }
+  let perm = Notification.permission;
+  if (perm === "default") perm = await Notification.requestPermission();
+  if (perm !== "granted") { toast("Alerts are blocked. Allow notifications for this site in your settings."); return; }
+  state.alerts = true; store.set("hd.alerts", true);
+  if (!state.gps) locate(false); else watch();
+  toast(`Alerts on. We'll buzz you when a hotdog is within ${ALERT_M} m`);
+  render(); checkAlerts();
+}
+function disableAlerts() { state.alerts = false; store.set("hd.alerts", false); toast("Alerts off"); render(); }
+function checkAlerts() {
+  if (!state.alerts || !state.gps || !state.me) return;
+  const now = Date.now();
+  const near = visible().find((s) => dist(s) <= ALERT_M && statusOf(s).state !== "closed" && !(state.alerted[s.id] && now - state.alerted[s.id] < ALERT_REPEAT_MS));
+  if (!near) return;
+  state.alerted[near.id] = now; store.set("hd.alerted", state.alerted);
+  notify(near, dist(near));
+}
+async function notify(s, d) {
+  const title = `Hot dang! Hotdog ${fmtDist(d)} away`;
+  const body = `${s.name}, ${mins(d)} min walk. Tap to go.`;
+  const opts = { body, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "hd-" + s.id, data: { id: s.id }, vibrate: [100, 50, 100] };
+  try {
+    const reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());
+    if (reg) await reg.showNotification(title, opts);
+    else if (Notification.permission === "granted") new Notification(title, opts).onclick = () => { window.focus(); goTo(s.id); };
+  } catch (e) {}
+  if (document.visibilityState === "visible") toast(title);
+}
+function goTo(id) { const s = findSpot(id); if (s) startNav(s); }
+let pendingGo = new URLSearchParams(location.search).get("go");
+function openFromLink() { if (pendingGo && findSpot(pendingGo)) { const id = pendingGo; pendingGo = null; history.replaceState(null, "", location.pathname); goTo(id); } }
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.go) { pendingGo = e.data.go; openFromLink(); } });
+}
 
 /* ---------- panel ---------- */
 const panel = $("#panel");
@@ -238,15 +439,15 @@ function spotCard(s, heading) {
   return `<h2>${heading}</h2>
   <div class="result">
     <div class="meta"><span class="dot t-${s.type}"></span>${TYPES[s.type]} · ${esc(s.item)}${s.price ? ` · $${Number(s.price).toFixed(2)}` : ""}</div>
-    <div class="name">${esc(s.name)}</div>
+    <div class="name">${esc(s.name)} ${statusTag(s)}</div>
     <div class="meta"><span class="stars" aria-label="${r.avg.toFixed(1)} out of 5">${starStr(r.avg)}</span><span>${r.n ? `${r.avg.toFixed(1)} · ${r.n} review${r.n === 1 ? "" : "s"}` : "No reviews yet"}</span></div>
     <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : ""}</span></div>
     <div class="meta">${status}${mine ? `<span>You've had ${mine} here</span>` : ""}</div>
-    ${s.hours ? `<div class="meta">Hours: ${esc(s.hours)}</div>` : ""}
+    <div class="meta">${esc(statusOf(s).label)}${s.hoursRaw ? ` · <span title="${esc(s.hoursRaw)}">${esc(s.hoursRaw.length > 40 ? s.hoursRaw.slice(0, 40) + "…" : s.hoursRaw)}</span>` : ""}</div>
     ${s.photo ? `<img class="photo" src="${s.photo}" alt="Photo of ${esc(s.name)}">` : ""}
     <div class="actions">
       <button class="btn eat" data-act="eat">I ate one!</button>
-      <a class="btn primary" href="${mapsUrl(s)}" target="_blank" rel="noopener">Directions</a>
+      <button class="btn primary" data-act="go">Take me there</button>
       <button class="btn" data-act="yes">Still here</button>
     </div>
   </div>
@@ -282,7 +483,7 @@ function render() {
   const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
   if (state.tab === "stats" && state.mode === "browse") { panel.innerHTML = tabs + statsView(); return; }
   const list = visible();
-  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Shelf"]]
+  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"]]
     .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");
   let top;
   if (state.mode === "add") {
@@ -291,13 +492,15 @@ function render() {
       ${state.draft ? "" : `<p class="note">First tap the map to drop a pin.</p>`}
       <label for="f-name">Place name<input type="text" id="f-name" required placeholder="e.g. Sam's Sausage Sizzle"></label>
       <div class="two">
-        <label for="f-type">Kind<select id="f-type"><option value="stand">Street vendor</option><option value="restaurant">Restaurant</option><option value="shelf">Shelf</option></select></label>
+        <label for="f-type">Kind<select id="f-type"><option value="stand">Street vendor</option><option value="restaurant">Restaurant</option><option value="shelf">Convenience store</option></select></label>
         <label for="f-price">Price<input type="number" id="f-price" min="0" step="0.1" placeholder="5.00"></label>
       </div>
       <label for="f-photo">Photo<input type="file" id="f-photo" accept="image/*"></label>
       <div class="actions"><button class="btn primary" type="submit" ${state.draft ? "" : "disabled"}>Add spot</button><button class="btn" type="button" data-act="cancel">Cancel</button></div>
       <p class="note">Saved on this phone for now. Sharing spots with everyone comes with accounts.</p>
     </form>`;
+  } else if (state.nav) {
+    top = navCard();
   } else if (state.loading && !list.length) {
     top = `<div class="status"><h2>Sniffing out hotdogs…</h2><p class="note">Checking street vendors, restaurants and stores near you.</p></div>`;
   } else if (state.error && !list.length) {
@@ -309,8 +512,10 @@ function render() {
     top = spotCard(s, s.id === list[0]?.id ? "Your closest hotdog" : "Selected spot");
   }
   const rows = list.slice(0, 40).map((s) => { const r = ratingOf(s.id); return `<button class="row" data-id="${esc(s.id)}" aria-current="${s.id === state.selected}">
-    <span class="dot t-${s.type}"></span><span class="n">${esc(s.name)}<span class="sub">${s.likely ? "Usually sells hotdogs" : r.n ? "★ " + r.avg.toFixed(1) : TYPES[s.type]}</span></span><span class="d">${fmtDist(dist(s))}</span></button>`; }).join("");
-  panel.innerHTML = `${tabs}<div class="filters" role="group" aria-label="Filter spots">${filters}</div>${top}
+    <span class="dot t-${s.type}"></span><span class="n"><span class="nm">${esc(s.name)}</span> ${statusTag(s)}<span class="sub">${s.likely ? "Usually sells hotdogs" : r.n ? "★ " + r.avg.toFixed(1) : TYPES[s.type]}</span></span><span class="d">${fmtDist(dist(s))}</span></button>`; }).join("");
+  const alertRow = `<div class="alertrow"><div><b>Hotdog alerts</b><div class="note">${state.alerts ? `On. We'll let you know when one is within ${ALERT_M} m.` : `Get a buzz when a hotdog is within ${ALERT_M} m.`}</div></div>
+    <button class="switch" role="switch" aria-checked="${state.alerts}" data-act="${state.alerts ? "alertsoff" : "alertson"}" aria-label="Hotdog alerts"><span></span></button></div>`;
+  panel.innerHTML = `${tabs}${state.nav ? "" : `<div class="filters" role="group" aria-label="Filter spots">${filters}</div>`}${top}${state.nav ? "" : alertRow}
     ${rows ? `<h2>Nearby</h2><div class="list">${rows}</div>` : ""}
     <p class="note">${state.gps ? "Using your location." : "Location not shared. Tap Find me or Move me."} Map data from OpenStreetMap.</p>`;
 }
@@ -326,9 +531,14 @@ panel.addEventListener("click", (e) => {
   }
   if (b.dataset.filter) { state.filter = b.dataset.filter; state.selected = null; state.reviewing = false; render(); return; }
   if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
-  const s = findSpot(state.selected) || visible()[0];
+  const s = (state.nav && state.nav.spot) || findSpot(state.selected) || visible()[0];
   switch (b.dataset.act) {
     case "retry": loadSpots(); break;
+    case "go": startNav(s); break;
+    case "stopnav": stopNav(); break;
+    case "recenter": state.follow = true; if (state.me) map.panTo([state.me.lat, state.me.lng]); render(); break;
+    case "alertson": enableAlerts(); break;
+    case "alertsoff": disableAlerts(); break;
     case "add": startAdd(); break;
     case "cancel": state.mode = "browse"; state.draft = null; render(); break;
     case "yes": state.seen[s.id] = Date.now(); saveAll(); toast("Thanks for checking!"); render(); break;
@@ -367,7 +577,7 @@ function startAdd() { state.mode = "add"; state.draft = null; state.tab = "spots
 $("#counter").addEventListener("click", () => { state.tab = "stats"; state.mode = "browse"; state.draft = null; render(); });
 $("#find").addEventListener("click", () => {
   state.mode = "browse"; state.draft = null; state.tab = "spots"; state.reviewing = false;
-  const n = visible()[0];
+  const n = visible().find((s) => statusOf(s).state !== "closed") || visible()[0];
   if (n) { state.selected = n.id; map.flyTo([n.lat, n.lng], Math.max(map.getZoom(), 16)); toast(`${n.name}, ${fmtDist(dist(n))} away`); }
   else toast(state.loading ? "Still sniffing…" : "No hotdogs found yet");
   render();
