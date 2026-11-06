@@ -9,7 +9,7 @@
   if (!cfg.supabaseUrl || !cfg.supabaseKey || !window.supabase) return;
 
   const sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" }, // implicit so an emailed link works in whichever browser the mail app opens
   });
   const me = { user: null, profile: null };
   const cache = { photos: {}, reviews: {}, comments: {}, myVotes: {} };
