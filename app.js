@@ -330,7 +330,9 @@ function onPosition(p) {
   checkAlerts();
   // Keep typing safe: only redraw the map while a form is open.
   if (state.reviewing || state.mode !== "browse") { drawMap(); return; }
-  if (state.nav || Date.now() - lastPanelRender > 5000) { lastPanelRender = Date.now(); render(); } else drawMap();
+  // don't redraw the panel while someone is typing in it (it would wipe what they typed)
+  const typing = panel.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || [...panel.querySelectorAll("input[type=email],input[type=text],textarea")].some((i) => i.value);
+  if (!typing && (state.nav || Date.now() - lastPanelRender > 5000)) { lastPanelRender = Date.now(); render(); } else drawMap();
 }
 function useFallback() { state.me = { ...DEFAULT_CENTRE }; state.gps = false; render(); loadSpots(); toast("Showing Sydney. Tap Move me to set where you are."); }
 
@@ -632,7 +634,9 @@ function shrink(file) {
   });
 }
 function startAdd() { state.mode = "add"; state.draft = null; state.tab = "spots"; render(); }
-$("#counter").addEventListener("click", () => { state.tab = "stats"; state.mode = "browse"; state.draft = null; render(); });
+$("#counter").addEventListener("click", () => { state.tab = "stats"; state.mode = "browse"; state.draft = null; render(); showPanel(); });
+// on phones the panel sits below the map, so bring it into view
+function showPanel() { const p = $(".panel"); if (p && p.getBoundingClientRect().top > innerHeight * 0.6) p.scrollIntoView({ behavior: "smooth", block: "start" }); }
 $("#find").addEventListener("click", () => {
   state.mode = "browse"; state.draft = null; state.tab = "spots"; state.reviewing = false;
   const n = visible().find((s) => statusOf(s).state !== "closed") || visible()[0];
