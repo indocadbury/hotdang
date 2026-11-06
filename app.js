@@ -19,7 +19,7 @@ const OVERPASS = [
 ];
 const SHELF_BRANDS = "7-Eleven|Circle K|Wawa|Sheetz|QuikTrip|Speedway|Casey's|Kwik Trip|Holiday|OXXO|FamilyMart|Lawson";
 const FOOD_COURT_BRANDS = "Costco|IKEA";
-const TYPES = { stand: "Street vendor", restaurant: "Restaurant", shelf: "Shelf" };
+const TYPES = { stand: "Street vendor", restaurant: "Restaurant", shelf: "Convenience store" };
 const ALERT_M = 400;           // "within walking distance" for alerts
 const ALERT_REPEAT_MS = 6 * 3600e3; // don't re-alert the same spot for 6 hours
 const ARRIVE_M = 30;
@@ -483,7 +483,7 @@ function render() {
   const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
   if (state.tab === "stats" && state.mode === "browse") { panel.innerHTML = tabs + statsView(); return; }
   const list = visible();
-  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Shelf"]]
+  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"]]
     .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");
   let top;
   if (state.mode === "add") {
@@ -492,7 +492,7 @@ function render() {
       ${state.draft ? "" : `<p class="note">First tap the map to drop a pin.</p>`}
       <label for="f-name">Place name<input type="text" id="f-name" required placeholder="e.g. Sam's Sausage Sizzle"></label>
       <div class="two">
-        <label for="f-type">Kind<select id="f-type"><option value="stand">Street vendor</option><option value="restaurant">Restaurant</option><option value="shelf">Shelf</option></select></label>
+        <label for="f-type">Kind<select id="f-type"><option value="stand">Street vendor</option><option value="restaurant">Restaurant</option><option value="shelf">Convenience store</option></select></label>
         <label for="f-price">Price<input type="number" id="f-price" min="0" step="0.1" placeholder="5.00"></label>
       </div>
       <label for="f-photo">Photo<input type="file" id="f-photo" accept="image/*"></label>
