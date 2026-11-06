@@ -82,7 +82,10 @@
     }
     return data;
   }
+  const shown = new Set();
+  const buried = (p) => p.dislikes >= 5 && p.dislikes >= p.likes * 2 && !shown.has(p.id);
   function postHtml(p, showSpot) {
+    if (buried(p)) return `<article class="post buried" data-post="${p.id}"><div class="post-body"><p class="note">Hidden because lots of people disliked it.</p><div><button class="vote" data-soc="unbury">Show anyway</button></div></div></article>`;
     const mine = cache.myVotes[p.id] || 0;
     const comments = cache.comments[p.id];
     return `<article class="post" data-post="${p.id}">
@@ -210,7 +213,37 @@
       const merged = [...new Set([...(s.osmSpecials || []), ...tags])];
       if (merged.length !== (s.osmSpecials || []).length) { s.osmSpecials = merged; changed = true; }
     }
-    if (changed) renderCore();
+    if (changed) render();
+  }
+
+  /* ---------- shared spots ---------- */
+  const toSpot = (r) => ({ id: "c:" + r.id, src: "community", name: r.name, type: r.type, item: "Hotdogs", lat: r.lat, lng: r.lng, price: r.price, added: new Date(r.created_at).getTime(), by: r.profiles?.username || null });
+  let lastSpotsAt = null;
+  async function loadCommunitySpots() {
+    const c = state.me; if (!c) return;
+    if (lastSpotsAt && Math.abs(lastSpotsAt.lat - c.lat) < 0.05 && Math.abs(lastSpotsAt.lng - c.lng) < 0.05) return;
+    const d = 0.3; // roughly 30 km around you
+    const { data, error } = await sb.from("spots").select("id,name,type,lat,lng,price,created_at,profiles(username)")
+      .gte("lat", c.lat - d).lte("lat", c.lat + d).gte("lng", c.lng - d).lte("lng", c.lng + d).limit(300);
+    if (error || !data) return;
+    lastSpotsAt = { lat: c.lat, lng: c.lng };
+    state.community = data.map(toSpot);
+    render();
+  }
+  async function addSpot(s) {
+    if (!signedIn()) return null;
+    const { data, error } = await sb.from("spots").insert({ name: s.name.slice(0, 80), type: s.type, lat: s.lat, lng: s.lng, price: s.price }).select("id,name,type,lat,lng,price,created_at").single();
+    if (error || !data) return null;
+    const spot = { ...toSpot(data), by: me.profile.username };
+    if (s.photo) { // carry the photo across as the spot's first post
+      try {
+        const blob = await (await fetch(s.photo)).blob();
+        const path = `${me.user.id}/${Date.now()}.jpg`;
+        const up = await sb.storage.from("photos").upload(path, blob, { contentType: "image/jpeg" });
+        if (!up.error) await sb.from("posts").insert({ spot_id: spot.id, spot_name: spot.name, photo_path: path });
+      } catch (e) { /* the spot is still shared */ }
+    }
+    return spot;
   }
 
   /* ---------- events ---------- */
@@ -224,6 +257,7 @@
         if (openComments.has(pid)) openComments.delete(pid); else { openComments.add(pid); if (!cache.comments[pid]) { refreshVisiblePostsSoon(); await loadComments(pid); } }
         refreshVisiblePostsSoon(); break;
       case "delpost": deletePost(pid); break;
+      case "unbury": shown.add(pid); refreshVisiblePostsSoon(); break;
       case "cancelupload": document.getElementById("hd-upload")?.reset(); document.getElementById("hd-upload-more").hidden = true; break;
       case "openspot": { const s = findSpot(b.dataset.spot); if (s) { state.tab = "spots"; state.selected = s.id; map.panTo([s.lat, s.lng]); render(); } else toast("That spot isn't near you"); break; }
     }
@@ -271,7 +305,8 @@
       if (on) sb.from("spot_dogs").upsert({ spot_id: s.id, dog }).then(() => {});
       else sb.from("spot_dogs").delete().eq("spot_id", s.id).eq("dog", dog).eq("user_id", me.user.id).then(() => {});
     },
-    onSpotsLoaded() { loadSharedDogs(); },
+    onSpotsLoaded() { loadSharedDogs(); loadCommunitySpots(); },
+    onAddSpot: addSpot,
   };
 
   // supabase-js can deadlock if other calls are awaited inside this callback, so defer the work

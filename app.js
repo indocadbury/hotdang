@@ -39,7 +39,8 @@ const state = {
   eaten: store.get("hd.eaten", []),     // [{id, name, type, t}]
   reviews: store.get("hd.reviews", {}), // {spotId: [{stars, text, t}]}
   seen: store.get("hd.seen", {}),       // {spotId: time}
-  mine: store.get("hd.mine", []),       // spots you added
+  mine: store.get("hd.mine", []),       // spots you added on this phone only
+  community: [],                        // spots other people shared (from the backend)
   alerts: store.get("hd.alerts", false),
   alerted: store.get("hd.alerted", {}),
   dogTags: store.get("hd.dogs", {}),    // {spotId: ["cheese", ...]} what you've seen on the menu
@@ -66,7 +67,7 @@ const fmtDist = (m) => (m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1000).t
 const mins = (m) => Math.max(1, Math.round(m / WALK_M_PER_MIN));
 function ago(t) { const h = (Date.now() - t) / 3600e3; if (h < 1) return "just now"; if (h < 24) return Math.round(h) + "h ago"; return Math.round(h / 24) + "d ago"; }
 const starStr = (v) => { const f = Math.round(v); return "★★★★★".slice(0, f) + "☆☆☆☆☆".slice(0, 5 - f); };
-const allSpots = () => [...state.spots, ...state.mine];
+const allSpots = () => [...state.spots, ...state.community, ...state.mine];
 /* ---------- special dogs ---------- */
 const SPECIALS = [
   { key: "cheese", label: "Cheese dog", re: /chee[sz]e/i },
@@ -467,7 +468,7 @@ function spotCard(s, heading) {
     <div class="name">${esc(s.name)} ${statusTag(s)}</div>
     <div class="meta"><span class="stars" aria-label="${r.avg.toFixed(1)} out of 5">${starStr(r.avg)}</span><span>${r.n ? `${r.avg.toFixed(1)} · ${r.n} review${r.n === 1 ? "" : "s"}` : "No reviews yet"}</span></div>
     <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : ""}</span></div>
-    <div class="meta">${status}${mine ? `<span>You've had ${mine} here</span>` : ""}</div>
+    <div class="meta">${status}${s.by ? `<span>Added by ${esc(s.by)}</span>` : ""}${mine ? `<span>You've had ${mine} here</span>` : ""}</div>
     <div class="meta">${esc(statusOf(s).label)}${s.hoursRaw ? ` · <span title="${esc(s.hoursRaw)}">${esc(s.hoursRaw.length > 40 ? s.hoursRaw.slice(0, 40) + "…" : s.hoursRaw)}</span>` : ""}</div>
     ${s.photo ? `<img class="photo" src="${s.photo}" alt="Photo of ${esc(s.name)}">` : ""}
     <div class="actions">
@@ -617,7 +618,11 @@ panel.addEventListener("submit", async (e) => {
   const photo = file ? await shrink(file) : null;
   const s = { id: "me:" + Date.now(), src: "you", name: $("#f-name").value.trim() || "Unnamed spot", type: $("#f-type").value, item: "Hotdogs",
     lat: state.draft.lat, lng: state.draft.lng, price: parseFloat($("#f-price").value) || null, added: Date.now(), photo };
-  state.mine.push(s); state.selected = s.id; state.mode = "browse"; state.draft = null; saveAll(); toast("Spot added!"); render();
+  state.mode = "browse"; state.draft = null;
+  const shared = social() ? await social().onAddSpot(s).catch(() => null) : null;
+  if (shared) { state.community.push(shared); state.selected = shared.id; toast("Spot added for everyone!"); }
+  else { state.mine.push(s); state.selected = s.id; saveAll(); toast(social() ? "Spot saved on this phone. Sign in to share spots with everyone" : "Spot added!"); }
+  render();
 });
 function shrink(file) {
   return new Promise((res) => {
