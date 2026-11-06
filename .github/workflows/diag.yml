@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           while read u; do
-            r=$(curl -sS -L -o /tmp/p.html -w "%{http_code} %{url_effective}" -m 25 -A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1" "$u" 2>&1)
+            r=$(curl -sS -L -o /tmp/p.html -w "%{http_code} %{url_effective}" -m 25 -A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1" "$u" < /dev/null 2>&1)
             t=$(grep -o -i '<title[^>]*>[^<]*' /tmp/p.html | head -1 | sed 's/<title[^>]*>//' | tr -s ' \n' ' ' | cut -c1-80)
             echo "R $u | $r | $t"
           done < .github/urls.txt
