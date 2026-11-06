@@ -42,10 +42,13 @@ const state = {
   mine: store.get("hd.mine", []),       // spots you added
   alerts: store.get("hd.alerts", false),
   alerted: store.get("hd.alerted", {}),
+  dogTags: store.get("hd.dogs", {}),    // {spotId: ["cheese", ...]} what you've seen on the menu
+  editingDogs: false,
   nav: null,       // {spot, coords, steps, total, idx, arrived, straight}
   follow: true,    // map follows you while navigating
   lastLoad: null,  // where spots were last loaded
 };
+const saveDogs = () => store.set("hd.dogs", state.dogTags);
 const saveAll = () => { store.set("hd.eaten", state.eaten); store.set("hd.reviews", state.reviews); store.set("hd.seen", state.seen); store.set("hd.mine", state.mine); };
 
 /* ---------- helpers ---------- */
@@ -63,7 +66,25 @@ const mins = (m) => Math.max(1, Math.round(m / WALK_M_PER_MIN));
 function ago(t) { const h = (Date.now() - t) / 3600e3; if (h < 1) return "just now"; if (h < 24) return Math.round(h) + "h ago"; return Math.round(h / 24) + "d ago"; }
 const starStr = (v) => { const f = Math.round(v); return "★★★★★".slice(0, f) + "☆☆☆☆☆".slice(0, 5 - f); };
 const allSpots = () => [...state.spots, ...state.mine];
-const visible = () => allSpots().filter((s) => state.filter === "all" || s.type === state.filter).sort((a, b) => dist(a) - dist(b));
+/* ---------- special dogs ---------- */
+const SPECIALS = [
+  { key: "cheese", label: "Cheese dog", re: /chee[sz]e/i },
+  { key: "chilli", label: "Chilli dog", re: /chil(l)?i|chili/i },
+  { key: "footlong", label: "Footlong", re: /foot ?long/i },
+  { key: "loaded", label: "Loaded dog", re: /loaded|supreme/i },
+  { key: "corndog", label: "Corn dog", re: /corn ?dog|korean/i },
+  { key: "chicago", label: "Chicago dog", re: /chicago/i },
+  { key: "brat", label: "Bratwurst", re: /\bbrat|wurst/i },
+  { key: "veggie", label: "Veggie dog", re: /vegan|vegetarian|veggie|plant/i },
+];
+const SPECIAL_BY_KEY = Object.fromEntries(SPECIALS.map((x) => [x.key, x]));
+function specialsOf(s) {
+  const set = new Set(s.osmSpecials || []);
+  (state.dogTags[s.id] || []).forEach((k) => set.add(k));
+  return SPECIALS.filter((x) => set.has(x.key));
+}
+const specialsText = (s, n = 3) => specialsOf(s).slice(0, n).map((x) => x.label).join(" · ");
+const visible = () => allSpots().filter((s) => state.filter === "all" || (state.filter === "special" ? specialsOf(s).length > 0 : s.type === state.filter)).sort((a, b) => dist(a) - dist(b));
 const findSpot = (id) => allSpots().find((s) => s.id === id);
 function ratingOf(id) { const rs = state.reviews[id] || []; return { n: rs.length, avg: rs.length ? rs.reduce((a, r) => a + r.stars, 0) / rs.length : 0 }; }
 const mapsUrl = (s) => `https://www.google.com/maps/dir/?api=1${state.me ? `&origin=${state.me.lat},${state.me.lng}` : ""}&destination=${s.lat},${s.lng}&travelmode=walking`;
@@ -143,7 +164,9 @@ function classify(el) {
   const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon;
   if (lat == null) return null;
   const brand = t.brand || "";
-  const base = { id: `osm:${el.type}/${el.id}`, lat, lng, src: "osm", osm: `https://www.openstreetmap.org/${el.type}/${el.id}`, hoursRaw: t.opening_hours || null };
+  const text = [t.name, t.description, t.cuisine, t["diet:vegan"] === "yes" || t["diet:vegetarian"] === "yes" ? "veggie" : ""].filter(Boolean).join(" ");
+  const osmSpecials = SPECIALS.filter((x) => x.re.test(text)).map((x) => x.key);
+  const base = { id: `osm:${el.type}/${el.id}`, lat, lng, src: "osm", osm: `https://www.openstreetmap.org/${el.type}/${el.id}`, hoursRaw: t.opening_hours || null, osmSpecials };
   if (new RegExp(`^(${FOOD_COURT_BRANDS})$`, "i").test(brand)) {
     return { ...base, type: "restaurant", name: t.name || brand, item: "Food court hotdog", likely: true };
   }
@@ -252,7 +275,7 @@ function drawMap() {
     const sel = s.id === state.selected;
     const icon = L.divIcon({ className: "hd-pin" + (sel ? " sel" : ""), html: hotdogSvg(PIN_FLAG[s.type], s.live), iconSize: [64, 56], iconAnchor: [32, 52] });
     L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, zIndexOffset: sel ? 1000 : 0, alt: s.name })
-      .on("click", () => { if (state.mode !== "browse") return; state.selected = s.id; state.tab = "spots"; state.reviewing = false; render(); })
+      .on("click", () => { if (state.mode !== "browse") return; state.selected = s.id; state.tab = "spots"; state.reviewing = false; state.editingDogs = false; render(); })
       .addTo(pinLayer);
   });
   if (line) { line.remove(); line = null; }
@@ -409,8 +432,9 @@ function checkAlerts() {
   notify(near, dist(near));
 }
 async function notify(s, d) {
-  const title = `Hot dang! Hotdog ${fmtDist(d)} away`;
-  const body = `${s.name}, ${mins(d)} min walk. Tap to go.`;
+  const sp = specialsText(s, 2);
+  const title = sp ? `Hot dang! ${sp} ${fmtDist(d)} away` : `Hot dang! Hotdog ${fmtDist(d)} away`;
+  const body = `${s.name}, ${mins(d)} min walk.${sp ? ` They do ${specialsOf(s).map((x) => x.label.toLowerCase()).join(", ")}.` : ""} Tap to go.`;
   const opts = { body, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "hd-" + s.id, data: { id: s.id }, vibrate: [100, 50, 100] };
   try {
     const reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());
@@ -451,10 +475,20 @@ function spotCard(s, heading) {
       <button class="btn" data-act="yes">Still here</button>
     </div>
   </div>
+  <h2>What dogs they have</h2>
+  ${dogsSection(s)}
   <h2>Reviews</h2>
   ${state.reviewing ? reviewForm() : `<div><button class="btn" data-act="review">Write a review</button></div>`}
   <div class="reviews">${reviews.length ? reviews.map((rv) => `<div class="review"><div class="who">You <span class="stars">${starStr(rv.stars)}</span><span class="note">${ago(rv.t)}</span></div><p>${esc(rv.text)}</p></div>`).join("") : `<p class="note">No reviews yet. Be the first.</p>`}</div>
   ${s.osm ? `<p class="note">Spot from <a href="${s.osm}" target="_blank" rel="noopener">OpenStreetMap</a>. Wrong? You can fix it there.</p>` : ""}`;
+}
+function dogsSection(s) {
+  const have = new Set(specialsOf(s).map((x) => x.key));
+  if (state.editingDogs) return `<div class="dogpick" role="group" aria-label="Dogs on the menu">
+    ${SPECIALS.map((x) => `<button type="button" class="chip" data-dog="${x.key}" aria-pressed="${have.has(x.key)}">${x.label}</button>`).join("")}
+    </div><div class="actions"><button class="btn primary" data-act="dogsdone">Done</button></div>`;
+  return `${have.size ? `<div class="dogs">${specialsOf(s).map((x) => `<span class="dogchip">${x.label}</span>`).join("")}</div>` : `<p class="note">Just classic dogs as far as we know.</p>`}
+    <div><button class="btn" data-act="dogsedit">${have.size ? "Edit" : "Add"} what they have</button></div>`;
 }
 function reviewForm() {
   return `<form id="reviewForm">
@@ -483,8 +517,8 @@ function render() {
   const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
   if (state.tab === "stats" && state.mode === "browse") { panel.innerHTML = tabs + statsView(); return; }
   const list = visible();
-  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"]]
-    .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");
+  const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"], ["special", "Specialty dogs"]]
+    .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" && k !== "special" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");
   let top;
   if (state.mode === "add") {
     top = `<h2>Add a hotdog spot</h2>
@@ -512,7 +546,7 @@ function render() {
     top = spotCard(s, s.id === list[0]?.id ? "Your closest hotdog" : "Selected spot");
   }
   const rows = list.slice(0, 40).map((s) => { const r = ratingOf(s.id); return `<button class="row" data-id="${esc(s.id)}" aria-current="${s.id === state.selected}">
-    <span class="dot t-${s.type}"></span><span class="n"><span class="nm">${esc(s.name)}</span> ${statusTag(s)}<span class="sub">${s.likely ? "Usually sells hotdogs" : r.n ? "★ " + r.avg.toFixed(1) : TYPES[s.type]}</span></span><span class="d">${fmtDist(dist(s))}</span></button>`; }).join("");
+    <span class="dot t-${s.type}"></span><span class="n"><span class="nm">${esc(s.name)}</span> ${statusTag(s)}<span class="sub">${specialsOf(s).length ? `<b class="spec">${esc(specialsText(s))}</b>` : s.likely ? "Usually sells hotdogs" : r.n ? "★ " + r.avg.toFixed(1) : TYPES[s.type]}</span></span><span class="d">${fmtDist(dist(s))}</span></button>`; }).join("");
   const alertRow = `<div class="alertrow"><div><b>Hotdog alerts</b><div class="note">${state.alerts ? `On. We'll let you know when one is within ${ALERT_M} m.` : `Get a buzz when a hotdog is within ${ALERT_M} m.`}</div></div>
     <button class="switch" role="switch" aria-checked="${state.alerts}" data-act="${state.alerts ? "alertsoff" : "alertson"}" aria-label="Hotdog alerts"><span></span></button></div>`;
   panel.innerHTML = `${tabs}${state.nav ? "" : `<div class="filters" role="group" aria-label="Filter spots">${filters}</div>`}${top}${state.nav ? "" : alertRow}
@@ -529,8 +563,15 @@ panel.addEventListener("click", (e) => {
     panel.querySelectorAll("[data-star]").forEach((x) => x.classList.toggle("on", +x.dataset.star <= state.pick));
     panel.querySelector("#reviewForm [type=submit]").disabled = false; return;
   }
+  if (b.dataset.dog) {
+    const s = findSpot(state.selected) || visible()[0]; if (!s) return;
+    const cur = new Set(state.dogTags[s.id] || []);
+    const on = b.getAttribute("aria-pressed") !== "true";
+    if (on) cur.add(b.dataset.dog); else { cur.delete(b.dataset.dog); if ((s.osmSpecials || []).includes(b.dataset.dog)) s.osmSpecials = s.osmSpecials.filter((k) => k !== b.dataset.dog); }
+    state.dogTags[s.id] = [...cur]; saveDogs(); b.setAttribute("aria-pressed", String(on)); return;
+  }
   if (b.dataset.filter) { state.filter = b.dataset.filter; state.selected = null; state.reviewing = false; render(); return; }
-  if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
+  if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; state.editingDogs = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
   const s = (state.nav && state.nav.spot) || findSpot(state.selected) || visible()[0];
   switch (b.dataset.act) {
     case "retry": loadSpots(); break;
@@ -539,6 +580,8 @@ panel.addEventListener("click", (e) => {
     case "recenter": state.follow = true; if (state.me) map.panTo([state.me.lat, state.me.lng]); render(); break;
     case "alertson": enableAlerts(); break;
     case "alertsoff": disableAlerts(); break;
+    case "dogsedit": state.editingDogs = true; render(); break;
+    case "dogsdone": state.editingDogs = false; toast("Thanks! Menu updated"); render(); break;
     case "add": startAdd(); break;
     case "cancel": state.mode = "browse"; state.draft = null; render(); break;
     case "yes": state.seen[s.id] = Date.now(); saveAll(); toast("Thanks for checking!"); render(); break;

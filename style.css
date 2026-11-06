@@ -157,3 +157,8 @@ textarea{min-height:70px;resize:vertical}
 .oh-unknown{color:var(--muted);border-style:dashed}
 .row .n{white-space:normal}
 .row .nm{display:inline-block;max-width:calc(100% - 78px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+
+/* ---------- special dogs ---------- */
+.dogs,.dogpick{display:flex;flex-wrap:wrap;gap:6px}
+.dogchip{background:var(--mustard);color:var(--mustard-ink);border:2px solid var(--ink);border-radius:999px;padding:4px 12px;font-weight:600;font-size:14px}
+.row .sub .spec{color:var(--ketchup);font-weight:600}
