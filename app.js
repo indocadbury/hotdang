@@ -680,13 +680,57 @@ function startAdd() { state.mode = "add"; state.draft = null; state.tab = "spots
 $("#counter").addEventListener("click", () => { state.tab = "stats"; state.mode = "browse"; state.draft = null; render(); showPanel(); });
 // on phones the panel sits below the map, so bring it into view
 function showPanel() { const p = $(".panel"); if (p && p.getBoundingClientRect().top > innerHeight * 0.6) p.scrollIntoView({ behavior: "smooth", block: "start" }); }
-$("#find").addEventListener("click", () => {
-  state.mode = "browse"; state.draft = null; state.tab = "spots"; state.reviewing = false;
-  const n = visible().find((s) => statusOf(s).state !== "closed") || visible()[0];
-  if (n) { state.selected = n.id; map.flyTo([n.lat, n.lng], Math.max(map.getZoom(), 16)); toast(`${n.name}, ${fmtDist(dist(n))} away`); }
-  else toast(state.loading ? "Still sniffing…" : "No hotdogs found yet");
+$("#find").addEventListener("click", dogMe);
+/* "Dog me!": sniff for the closest open hotdog, then shout about it */
+let sniffing = false;
+async function dogMe() {
+  if (sniffing) return;
+  sniffing = true; state.mode = "browse"; state.draft = null; state.tab = "spots"; state.reviewing = false;
+  const btn = $("#find"); btn.classList.add("sniff"); btn.textContent = "Sniffing…";
+  const started = Date.now();
+  while (state.loading && !state.spots.length && Date.now() - started < 20000) await new Promise((r) => setTimeout(r, 250));
+  await new Promise((r) => setTimeout(r, Math.max(0, 900 - (Date.now() - started)))); // a little drama
+  btn.classList.remove("sniff"); btn.textContent = "Dog me!"; sniffing = false;
+  const list = visible();
+  const n = list.find((s) => statusOf(s).state !== "closed") || list[0];
+  if (n) { state.selected = n.id; map.flyTo([n.lat, n.lng], Math.max(map.getZoom(), 16)); }
   render();
+  showDogPop(n);
+}
+function showDogPop(n) {
+  const body = $("#dogpopBody");
+  if (!n) {
+    body.innerHTML = `<h2 class="dogpop-title" id="dogpop-title">No dogs nearby… yet</h2>
+      <p class="note">We couldn't sniff out a hotdog around here. Try searching another place, or add one you know.</p>
+      <div class="actions"><button class="btn primary" data-pop="search">🔍 Search a place</button><button class="btn" data-pop="add">+ Add a spot</button></div>`;
+  } else {
+    const m = dist(n), sp = specialsOf(n);
+    body.innerHTML = `<div class="dogpop-burst" aria-hidden="true">🌭</div>
+      <h2 class="dogpop-title" id="dogpop-title">HOT DANG!<br>YOU'VE GOT DOGS!</h2>
+      <div class="dogpop-spot">
+        <div class="meta"><span class="dot t-${n.type}"></span>${TYPES[n.type]} · ${esc(n.item)}</div>
+        <div class="name">${esc(n.name)} ${statusTag(n)}</div>
+        <div class="meta"><span class="big">${fmtDist(m)}</span><span>${m < 5000 ? mins(m) + " min walk" : "away"}</span></div>
+        ${sp.length ? `<div class="dogs">${sp.map((x) => `<span class="dogchip">${x.label}</span>`).join("")}</div>` : ""}
+      </div>
+      <div class="actions"><button class="btn eat" data-pop="go">Take me there</button><button class="btn" data-pop="info">More info</button></div>`;
+  }
+  $("#dogpop").hidden = false;
+  setTimeout(() => $("#dogpop .btn")?.focus(), 50);
+}
+function closeDogPop() { $("#dogpop").hidden = true; $("#find").focus(); }
+$("#dogpopClose").addEventListener("click", closeDogPop);
+$("#dogpop").addEventListener("click", (e) => {
+  if (e.target.id === "dogpop") return closeDogPop();
+  const b = e.target.closest("[data-pop]"); if (!b) return;
+  const n = findSpot(state.selected);
+  closeDogPop();
+  if (b.dataset.pop === "go" && n) { startNav(n); showPanel(); }
+  else if (b.dataset.pop === "info") showPanel();
+  else if (b.dataset.pop === "search") $("#searchBtn").click();
+  else if (b.dataset.pop === "add") $("#addBtn").click();
 });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#dogpop").hidden) closeDogPop(); });
 $("#addBtn").addEventListener("click", () => (state.mode === "add" ? ((state.mode = "browse"), (state.draft = null), render()) : startAdd()));
 $("#moveBtn").addEventListener("click", () => { state.mode = state.mode === "move" ? "browse" : "move"; state.draft = null; render(); });
 $("#locateBtn").addEventListener("click", () => locate(false));
