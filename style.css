@@ -233,3 +233,14 @@ textarea{min-height:70px;resize:vertical}
 .badge-tile .bi{font-size:30px;line-height:1.1}
 .badge-tile b{font-size:14px}
 .badge-tile .note{font-size:12px}
+
+/* ---------- passport, donate, photo places ---------- */
+.passport{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;padding:6px 2px}
+.stamp{transform:rotate(var(--r,0deg));border:3px double var(--ketchup);color:var(--ketchup);border-radius:14px;padding:10px 8px;text-align:center;display:flex;flex-direction:column;gap:2px;background:color-mix(in srgb,var(--ketchup) 6%,var(--surface));text-transform:uppercase;letter-spacing:.5px}
+.stamp .flag{font-size:28px;line-height:1.1}
+.stamp b{font-family:var(--logo);font-weight:400;font-size:18px;line-height:1.1;overflow-wrap:anywhere}
+.stamp span{font-size:11px;font-weight:600}
+.stamp .when{opacity:.8}
+.donate{border:3px solid var(--ink);border-radius:20px;padding:14px;display:flex;flex-direction:column;gap:10px;background:color-mix(in srgb,var(--relish) 12%,var(--surface))}
+.donate .btn{align-self:flex-start}
+.post-place{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:14px;color:var(--muted)}
