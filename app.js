@@ -53,6 +53,7 @@ const saveAll = () => { store.set("hd.eaten", state.eaten); store.set("hd.review
 
 /* ---------- helpers ---------- */
 const $ = (s) => document.querySelector(s);
+const OFFLINE_NOTE = "Photos, comments and the worldwide leaderboard can't connect right now. Your own hotdogs are still saved on this phone.";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function metres(a, b) {
   const R = 6371e3, r = Math.PI / 180;
@@ -208,7 +209,7 @@ async function loadSpots() {
   } catch (e) {
     state.error = "Couldn't reach the map data right now. Check your connection and try again.";
   }
-  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink();
+  state.loading = false; state.lastLoad = { ...state.me }; render(); if (!state.nav) fitToNearest(); checkAlerts(); openFromLink(); try { social()?.onSpotsLoaded(); } catch (e) { console.error(e); }
 }
 
 /* ---------- map ---------- */
@@ -477,8 +478,11 @@ function spotCard(s, heading) {
   </div>
   <h2>What dogs they have</h2>
   ${dogsSection(s)}
+  <h2>Photos</h2>
+  <div id="hd-photos" data-spot="${esc(s.id)}"><p class="note">${social() ? "Loading photos…" : OFFLINE_NOTE}</p></div>
   <h2>Reviews</h2>
   ${state.reviewing ? reviewForm() : `<div><button class="btn" data-act="review">Write a review</button></div>`}
+  <div id="hd-reviews" data-spot="${esc(s.id)}"></div>
   <div class="reviews">${reviews.length ? reviews.map((rv) => `<div class="review"><div class="who">You <span class="stars">${starStr(rv.stars)}</span><span class="note">${ago(rv.t)}</span></div><p>${esc(rv.text)}</p></div>`).join("") : `<p class="note">No reviews yet. Be the first.</p>`}</div>
   ${s.osm ? `<p class="note">Spot from <a href="${s.osm}" target="_blank" rel="noopener">OpenStreetMap</a>. Wrong? You can fix it there.</p>` : ""}`;
 }
@@ -504,9 +508,12 @@ function statsView() {
   const recent = state.eaten.slice(-8).reverse().map((e) => `<div class="row"><span class="dot t-${e.type || "stand"}"></span><span class="n">${esc(e.name)}</span><span class="d muted">${ago(e.t)}</span></div>`).join("");
   return `<div class="mycount"><div class="num">${me}</div><div><b>hotdogs eaten</b><div class="note">${week} this week · ${places} different spot${places === 1 ? "" : "s"}</div></div></div>
   ${recent ? `<h2>Your recent dogs</h2><div class="list">${recent}</div>` : `<p class="note">Tap "I ate one!" on any spot to start counting.</p>`}
-  <div class="soon"><h2>Global leaderboard</h2><p class="note">Coming soon. Once accounts are live you'll compete with hotdog eaters worldwide. Your count is saved on this phone until then.</p></div>`;
+  <div id="hd-account"></div>
+  <div id="hd-leaderboard"><div class="soon"><h2>Global leaderboard</h2><p class="note">${social() ? "Loading…" : OFFLINE_NOTE}</p></div></div>`;
 }
-function render() {
+function social() { return window.HDSocial && window.HDSocial.ready ? window.HDSocial : null; }
+function render() { renderCore(); try { social()?.afterRender(); } catch (e) { console.error(e); } }
+function renderCore() {
   drawMap();
   $("#count").textContent = state.eaten.length;
   $("#addBtn").setAttribute("aria-pressed", state.mode === "add");
@@ -514,8 +521,9 @@ function render() {
   const hint = $("#hint");
   hint.hidden = state.mode === "browse";
   hint.textContent = state.mode === "move" ? "Tap the map to set where you are." : state.draft ? "Now fill in the details." : "Tap the map where the hotdog is.";
-  const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
+  const tabs = `<div class="tabs" role="tablist"><button class="tab" role="tab" data-tab="spots" aria-selected="${state.tab === "spots"}">Find hotdogs</button><button class="tab" role="tab" data-tab="feed" aria-selected="${state.tab === "feed"}">Photos</button><button class="tab" role="tab" data-tab="stats" aria-selected="${state.tab === "stats"}">My hotdogs</button></div>`;
   if (state.tab === "stats" && state.mode === "browse") { panel.innerHTML = tabs + statsView(); return; }
+  if (state.tab === "feed" && state.mode === "browse") { panel.innerHTML = tabs + `<div id="hd-feed"><h2>Latest hotdog photos</h2><p class="note">${social() ? "Loading the latest hotdog photos…" : OFFLINE_NOTE}</p></div>`; return; }
   const list = visible();
   const filters = [["all", "All"], ["stand", "Street vendors"], ["restaurant", "Restaurants"], ["shelf", "Convenience stores"], ["special", "Specialty dogs"]]
     .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filter === k}">${k !== "all" && k !== "special" ? `<span class="dot t-${k}"></span>` : ""}${l}</button>`).join("");
@@ -568,7 +576,7 @@ panel.addEventListener("click", (e) => {
     const cur = new Set(state.dogTags[s.id] || []);
     const on = b.getAttribute("aria-pressed") !== "true";
     if (on) cur.add(b.dataset.dog); else { cur.delete(b.dataset.dog); if ((s.osmSpecials || []).includes(b.dataset.dog)) s.osmSpecials = s.osmSpecials.filter((k) => k !== b.dataset.dog); }
-    state.dogTags[s.id] = [...cur]; saveDogs(); b.setAttribute("aria-pressed", String(on)); return;
+    state.dogTags[s.id] = [...cur]; saveDogs(); b.setAttribute("aria-pressed", String(on)); social()?.onDog(s, b.dataset.dog, on); return;
   }
   if (b.dataset.filter) { state.filter = b.dataset.filter; state.selected = null; state.reviewing = false; render(); return; }
   if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; state.editingDogs = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
@@ -586,6 +594,7 @@ panel.addEventListener("click", (e) => {
     case "cancel": state.mode = "browse"; state.draft = null; render(); break;
     case "yes": state.seen[s.id] = Date.now(); saveAll(); toast("Thanks for checking!"); render(); break;
     case "eat": {
+      social()?.onEat(s);
       state.selected = s.id; state.eaten.push({ id: s.id, name: s.name, type: s.type, t: Date.now() }); saveAll();
       toast(`Hot dang! That's hotdog #${state.eaten.length}`); render();
       const c = $("#counter"); c.classList.remove("bump"); void c.offsetWidth; c.classList.add("bump"); break;
@@ -600,6 +609,7 @@ panel.addEventListener("submit", async (e) => {
     const s = findSpot(state.selected) || visible()[0];
     if (!state.pick || !s) return;
     (state.reviews[s.id] ||= []).push({ stars: state.pick, text: $("#r-text").value.trim() || "No words, just vibes.", t: Date.now() });
+    social()?.onReview(s, state.pick, $("#r-text").value.trim());
     state.reviewing = false; saveAll(); toast("Review posted"); render(); return;
   }
   if (!state.draft) return;
