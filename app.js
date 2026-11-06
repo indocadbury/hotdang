@@ -578,6 +578,66 @@ function reviewForm() {
   <div class="actions"><button class="btn primary" type="submit" ${state.pick ? "" : "disabled"}>Post review</button><button class="btn" type="button" data-act="cancelreview">Cancel</button></div>
 </form>`;
 }
+/* ---------- badges ---------- */
+const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+function bestStreak(eaten) {
+  const days = [...new Set(eaten.map((e) => dayKey(e.t)))].map((k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m, d).getTime(); }).sort((a, b) => a - b);
+  let best = 0, run = 0, prev = null;
+  for (const d of days) { run = prev != null && Math.round((d - prev) / DAY) === 1 ? run + 1 : 1; best = Math.max(best, run); prev = d; }
+  return best;
+}
+const BADGES = [
+  { key: "first", icon: "🌭", name: "First Dog", how: "Log your first hotdog", got: (e) => e.length >= 1 },
+  { key: "hat", icon: "🎩", name: "Hat Trick", how: "Eat 3 hotdogs", got: (e) => e.length >= 3 },
+  { key: "ten", icon: "🔟", name: "Ten Dogs Deep", how: "Eat 10 hotdogs", got: (e) => e.length >= 10 },
+  { key: "fifty", icon: "🏆", name: "Glizzy Gladiator", how: "Eat 50 hotdogs", got: (e) => e.length >= 50 },
+  { key: "hundred", icon: "👑", name: "Century Club", how: "Eat 100 hotdogs", got: (e) => e.length >= 100 },
+  { key: "explorer", icon: "🧭", name: "Dog Explorer", how: "Eat at 5 different spots", got: (e) => new Set(e.map((x) => x.id)).size >= 5 },
+  { key: "globe", icon: "🌏", name: "Globetrotter", how: "Eat at 25 different spots", got: (e) => new Set(e.map((x) => x.id)).size >= 25 },
+  { key: "street", icon: "🛒", name: "Street Eats", how: "Eat at a street vendor", got: (e) => e.some((x) => x.type === "stand") },
+  { key: "grill", icon: "🔥", name: "Roller Grill Royalty", how: "Eat 5 dogs from convenience stores", got: (e) => e.filter((x) => x.type === "shelf").length >= 5 },
+  { key: "double", icon: "✌️", name: "Double Dog Dare", how: "Eat 2 hotdogs in one day", got: (e) => Object.values(e.reduce((m, x) => ((m[dayKey(x.t)] = (m[dayKey(x.t)] || 0) + 1), m), {})).some((n) => n >= 2) },
+  { key: "streak", icon: "📅", name: "On a Roll", how: "Eat a hotdog 3 days in a row", got: (e) => bestStreak(e) >= 3 },
+  { key: "breakfast", icon: "🌅", name: "Breakfast of Champions", how: "Eat a hotdog before 9am", got: (e) => e.some((x) => new Date(x.t).getHours() < 9 && new Date(x.t).getHours() >= 4) },
+  { key: "owl", icon: "🦉", name: "Night Owl", how: "Eat a hotdog after 10pm", got: (e) => e.some((x) => new Date(x.t).getHours() >= 22 || new Date(x.t).getHours() < 4) },
+  { key: "special", icon: "🧀", name: "Fancy Frank", how: "Eat at a spot with special dogs", got: (e) => e.some((x) => x.special) },
+];
+const earned = (e = state.eaten) => BADGES.filter((b) => b.got(e));
+function badgesHtml() {
+  const have = new Set(earned().map((b) => b.key));
+  return `<h2>Badges <span class="note">${have.size} of ${BADGES.length}</span></h2>
+  <div class="badges">${BADGES.map((b) => `<div class="badge-tile ${have.has(b.key) ? "on" : ""}" title="${esc(b.how)}"><span class="bi" aria-hidden="true">${have.has(b.key) ? b.icon : "🔒"}</span><b>${esc(b.name)}</b><span class="note">${esc(b.how)}</span></div>`).join("")}</div>
+  <div class="actions"><button class="btn eat" data-act="share">📣 Share my hotdog stats</button></div>`;
+}
+/* a shareable picture of your stats, drawn on a canvas */
+async function shareStats() {
+  const n = state.eaten.length, places = new Set(state.eaten.map((e) => e.id)).size, got = earned();
+  const c = document.createElement("canvas"); c.width = 1080; c.height = 1350; const g = c.getContext("2d");
+  try { await document.fonts.load('80px "Bagel Fat One"'); } catch (e) {}
+  const logo = '"Bagel Fat One","Lilita One",system-ui,sans-serif', body = '"Fredoka",system-ui,sans-serif';
+  g.fillStyle = "#e0352b"; g.fillRect(0, 0, 1080, 1350);
+  g.fillStyle = "rgba(255,255,255,.08)"; for (let i = -1350; i < 1080; i += 90) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 45, 0); g.lineTo(i + 1395, 1350); g.lineTo(i + 1350, 1350); g.fill(); }
+  const rr = (x, y, w, h, r, fill, stroke) => { g.beginPath(); g.roundRect(x, y, w, h, r); g.fillStyle = fill; g.fill(); if (stroke) { g.lineWidth = 8; g.strokeStyle = stroke; g.stroke(); } };
+  rr(70, 90, 940, 220, 110, "#f3b960", "#3a2210"); rr(40, 150, 1000, 110, 55, "#c84a2a", "#3a2210");
+  g.textAlign = "center"; g.font = `120px ${logo}`; g.lineWidth = 14; g.strokeStyle = "#2a1a0e"; g.strokeText("HotDang!", 540, 250); g.fillStyle = "#fff"; g.fillText("HotDang!", 540, 250);
+  rr(90, 380, 900, 560, 60, "#fff8e6", "#2a1a0e");
+  g.fillStyle = "#2a1a0e"; g.font = `600 52px ${body}`; g.fillText("I've eaten", 540, 470);
+  g.font = `260px ${logo}`; g.fillStyle = "#e0352b"; g.strokeStyle = "#2a1a0e"; g.lineWidth = 10; g.strokeText(String(n), 540, 720); g.fillText(String(n), 540, 720);
+  g.fillStyle = "#2a1a0e"; g.font = `600 60px ${body}`; g.fillText(n === 1 ? "hotdog" : "hotdogs", 540, 800);
+  g.font = `500 40px ${body}`; g.fillStyle = "#7a6650"; g.fillText(`at ${places} spot${places === 1 ? "" : "s"} · ${got.length} badge${got.length === 1 ? "" : "s"}`, 540, 880);
+  g.font = `80px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif`; g.fillText(got.slice(-6).map((b) => b.icon).join(" ") || "🌭", 540, 1060);
+  g.fillStyle = "#fff"; g.font = `600 44px ${body}`; g.fillText("Find your closest dog:", 540, 1200); g.font = `700 48px ${body}`; g.fillText("indocadbury.github.io/hotdang", 540, 1265);
+  const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+  const file = new File([blob], "hotdang-stats.png", { type: "image/png" });
+  const text = `Hot dang! I've eaten ${n} hotdog${n === 1 ? "" : "s"} 🌭 Find your closest dog:`;
+  const url = location.origin + location.pathname;
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) return await navigator.share({ files: [file], text, url });
+    if (navigator.share) return await navigator.share({ text, url });
+  } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "hotdang-stats.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast("Saved your HotDang stats picture");
+}
 function statsView() {
   const me = state.eaten.length;
   const week = state.eaten.filter((e) => Date.now() - e.t < 7 * DAY).length;
@@ -585,6 +645,7 @@ function statsView() {
   const recent = state.eaten.slice(-8).reverse().map((e) => `<div class="row"><span class="dot t-${e.type || "stand"}"></span><span class="n">${esc(e.name)}</span><span class="d muted">${ago(e.t)}</span></div>`).join("");
   return `<div class="mycount"><div class="num">${me}</div><div><b>hotdogs eaten</b><div class="note">${week} this week · ${places} different spot${places === 1 ? "" : "s"}</div></div></div>
   ${recent ? `<h2>Your recent dogs</h2><div class="list">${recent}</div>` : `<p class="note">Tap "I ate one!" on any spot to start counting.</p>`}
+  ${badgesHtml()}
   <div id="hd-account"></div>
   <div id="hd-leaderboard"><div class="soon"><h2>Global leaderboard</h2><p class="note">${social() ? "Loading…" : OFFLINE_NOTE}</p></div></div>`;
 }
@@ -657,6 +718,7 @@ panel.addEventListener("click", (e) => {
   }
   if (b.dataset.filter) { state.filter = b.dataset.filter; state.selected = null; state.reviewing = false; render(); return; }
   if (b.dataset.id) { state.selected = b.dataset.id; state.reviewing = false; state.editingDogs = false; const s = findSpot(b.dataset.id); if (s) map.panTo([s.lat, s.lng]); render(); return; }
+  if (b.dataset.act === "share") { shareStats(); return; }
   const s = (state.nav && state.nav.spot) || findSpot(state.selected) || visible()[0];
   switch (b.dataset.act) {
     case "retry": loadSpots(); break;
@@ -672,8 +734,10 @@ panel.addEventListener("click", (e) => {
     case "yes": state.seen[s.id] = Date.now(); saveAll(); toast("Thanks for checking!"); render(); break;
     case "eat": {
       social()?.onEat(s);
-      state.selected = s.id; state.eaten.push({ id: s.id, name: s.name, type: s.type, t: Date.now() }); saveAll();
-      toast(`Hot dang! That's hotdog #${state.eaten.length}`); render();
+      const before = new Set(earned().map((b) => b.key));
+      state.selected = s.id; state.eaten.push({ id: s.id, name: s.name, type: s.type, t: Date.now(), special: specialsOf(s).length > 0 || undefined }); saveAll();
+      const fresh = earned().filter((b) => !before.has(b.key));
+      toast(fresh.length ? `${fresh[0].icon} Badge unlocked: ${fresh[0].name}!` : `Hot dang! That's hotdog #${state.eaten.length}`); render();
       const c = $("#counter"); c.classList.remove("bump"); void c.offsetWidth; c.classList.add("bump"); break;
     }
     case "review": state.selected = s.id; state.reviewing = true; state.pick = 0; render(); $("#r-text")?.focus(); break;
