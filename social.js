@@ -20,7 +20,7 @@
   const signedIn = () => !!(me.user && me.profile);
   const loginNeeded = (what) => {
     toast(`Sign in to ${what}`);
-    state.tab = "stats"; state.mode = "browse"; render();
+    state.tab = "stats"; state.mode = "browse"; render(); if (typeof showPanel === "function") showPanel();
     setTimeout(() => document.getElementById("hd-email")?.focus(), 50);
   };
 
@@ -44,12 +44,20 @@
       <h2>Join the leaderboard</h2>
       <p class="note">Sign in to post photos, like, comment and compete worldwide. We'll email you a sign-in link, no password needed.</p>
       <label for="hd-email">Email<input type="email" id="hd-email" required autocomplete="email" placeholder="you@example.com"></label>
-      <div class="actions"><button class="btn primary" type="submit">Email me a link</button></div></form>`;
+      <div class="actions"><button class="btn primary" type="submit">Email me a link</button></div>
+      <p id="hd-login-status" class="note login-status" role="status" hidden></p></form>`;
   }
   async function sendLink(email) {
     const redirect = location.origin + location.pathname;
-    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } });
-    toast(error ? `Couldn't send the link: ${error.message}` : "Check your email for the sign-in link");
+    const btn = document.querySelector("#hd-login-form button[type=submit]"), out = document.getElementById("hd-login-status");
+    const say = (msg, bad) => { if (out) { out.textContent = msg; out.classList.toggle("bad", !!bad); out.hidden = false; } toast(msg); };
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+    let error;
+    try { ({ error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } })); }
+    catch (e) { error = e; }
+    if (btn) { btn.disabled = false; btn.textContent = "Email me a link"; }
+    if (error) say(/rate|limit|seconds/i.test(error.message || "") ? `Too many tries. Wait a few minutes and try again. (${error.message})` : `Couldn't send the link: ${error.message || error}`, true);
+    else say(`Sent! Check ${email} for "Your Magic Link" (look in Junk too) and open it on this phone.`);
   }
   async function saveUsername(name) {
     const { error } = await sb.from("profiles").insert({ id: me.user.id, username: name.trim() });
@@ -311,9 +319,14 @@
 
   // supabase-js can deadlock if other calls are awaited inside this callback, so defer the work
   sb.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION") setTimeout(() => loadProfile().catch(() => {}).then(() => {
+    if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "INITIAL_SESSION") whenAppReady(() => loadProfile().catch(() => {}).then(() => {
       if (event === "SIGNED_IN" && !me.profile) { state.tab = "stats"; toast("Signed in! Pick a username"); }
       render();
-    }), 0);
+    }));
   });
+  // this file loads before app.js, so wait for the app before touching its state
+  function whenAppReady(fn) {
+    if (typeof render === "function" && typeof state === "object") return setTimeout(fn, 0);
+    window.addEventListener("load", () => setTimeout(fn, 0), { once: true });
+  }
 })();
