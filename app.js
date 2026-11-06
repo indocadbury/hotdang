@@ -161,10 +161,23 @@ const pupSvg = () => {
 };
 
 const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([DEFAULT_CENTRE.lat, DEFAULT_CENTRE.lng], 15);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-  maxZoom: 20, subdomains: "abcd",
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-}).addTo(map);
+// Map tiles: no API key needed. OpenStreetMap first, with key-free fallbacks if a server fails.
+const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const TILE_SOURCES = [
+  { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", opts: { maxZoom: 19, attribution: OSM_ATTR } },
+  { url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", opts: { maxZoom: 20, subdomains: "abcd", attribution: OSM_ATTR + ' &copy; <a href="https://carto.com/attributions">CARTO</a>' } },
+  { url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", opts: { maxZoom: 19, subdomains: "abc", attribution: OSM_ATTR + ", tiles by HOT" } },
+];
+let tileIdx = 0, tiles = null;
+function useTiles(i) {
+  if (tiles) tiles.remove();
+  tileIdx = i; let errors = 0, loaded = 0;
+  tiles = L.tileLayer(TILE_SOURCES[i].url, TILE_SOURCES[i].opts)
+    .on("tileload", () => loaded++)
+    .on("tileerror", () => { if (++errors >= 4 && loaded === 0 && tileIdx + 1 < TILE_SOURCES.length) useTiles(tileIdx + 1); })
+    .addTo(map);
+}
+useTiles(0);
 const pinLayer = L.layerGroup().addTo(map);
 let meMarker = null, draftMarker = null, line = null;
 
