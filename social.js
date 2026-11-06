@@ -1,5 +1,5 @@
 /* HotDang community features (Supabase):
- * sign in, photo posts with likes / dislikes / comments, global leaderboard,
+ * sign in, photo posts with hearts and comments, global leaderboard,
  * shared reviews and "what dogs they have" tags.
  * The app still works without this: everything falls back to this device.
  */
@@ -42,7 +42,7 @@
     if (signedIn()) return `<div class="acct row-acct"><div><b>Signed in as ${esc(me.profile.username)}</b><div class="note">Your hotdogs, photos and reviews are shared with everyone.</div></div><button class="btn" data-soc="signout">Sign out</button></div>`;
     return `<form id="hd-login-form" class="acct">
       <h2>Join the leaderboard</h2>
-      <p class="note">Sign in to post photos, like, comment and compete worldwide. We'll email you a sign-in link, no password needed.</p>
+      <p class="note">Sign in to post photos, heart, comment and compete worldwide. We'll email you a sign-in link, no password needed.</p>
       <label for="hd-email">Email<input type="email" id="hd-email" required autocomplete="email" placeholder="you@example.com"></label>
       <div class="actions"><button class="btn primary" type="submit">Email me a link</button></div>
       <p id="hd-login-status" class="note login-status" role="status" hidden></p></form>`;
@@ -57,7 +57,7 @@
     catch (e) { error = e; }
     if (btn) { btn.disabled = false; btn.textContent = "Email me a link"; }
     if (error) say(/rate|limit|seconds/i.test(error.message || "") ? `Too many tries. Wait a few minutes and try again. (${error.message})` : `Couldn't send the link: ${error.message || error}`, true);
-    else say(`Sent! Check ${email} for "Your Magic Link" (look in Junk too) and open it on this phone.`);
+    else say(`Hot Dang! Your dog journey starts once you confirm your email! We've sent a link to ${email}. Open it on this phone, and check Junk if it's not there.`);
   }
   async function saveUsername(name) {
     const { error } = await sb.from("profiles").insert({ id: me.user.id, username: name.trim() });
@@ -90,21 +90,17 @@
     }
     return data;
   }
-  const shown = new Set();
-  const buried = (p) => p.dislikes >= 5 && p.dislikes >= p.likes * 2 && !shown.has(p.id);
   function postHtml(p, showSpot) {
-    if (buried(p)) return `<article class="post buried" data-post="${p.id}"><div class="post-body"><p class="note">Hidden because lots of people disliked it.</p><div><button class="vote" data-soc="unbury">Show anyway</button></div></div></article>`;
-    const mine = cache.myVotes[p.id] || 0;
+    const loved = cache.myVotes[p.id] === 1;
     const comments = cache.comments[p.id];
     return `<article class="post" data-post="${p.id}">
-      <img class="post-img" src="${esc(photoUrl(p.photo_path))}" alt="${esc(p.caption || "Hotdog photo")}" loading="lazy">
+      <div style="position:relative"><img class="post-img" data-soc="dbl" src="${esc(photoUrl(p.photo_path))}" alt="${esc(p.caption || "Hotdog photo")}" loading="lazy"></div>
       <div class="post-body">
         <div class="meta"><b style="color:var(--ink)">${esc(p.username)}</b><span>${ago(new Date(p.created_at).getTime())}</span></div>
         ${showSpot ? `<div class="post-place">📍 <button class="linkish" data-soc="openspot" data-spot="${esc(p.spot_id)}"${p.lat != null ? ` data-lat="${p.lat}" data-lng="${p.lng}"` : ""}>${esc(p.spot_name || "a hotdog spot")}</button>${p.city ? `<span>${esc(p.city)}</span>` : ""}</div>` : ""}
         ${p.caption ? `<p class="caption">${esc(p.caption)}</p>` : ""}
         <div class="actions votes">
-          <button class="vote ${mine === 1 ? "on" : ""}" data-soc="vote" data-v="1" aria-pressed="${mine === 1}" aria-label="Like">👍 <span>${p.likes}</span></button>
-          <button class="vote ${mine === -1 ? "on" : ""}" data-soc="vote" data-v="-1" aria-pressed="${mine === -1}" aria-label="Dislike">👎 <span>${p.dislikes}</span></button>
+          <button class="vote heart ${loved ? "on" : ""}" data-soc="heart" aria-pressed="${loved}" aria-label="Heart this photo">${loved ? "❤️" : "🤍"} <span>${p.likes}</span></button>
           <button class="vote" data-soc="comments" aria-expanded="${openComments.has(p.id)}">💬 <span>${p.comments}</span></button>
           ${me.user && p.user_id === me.user.id ? `<button class="vote" data-soc="delpost" aria-label="Delete photo">Delete</button>` : ""}
         </div>
@@ -147,10 +143,12 @@
       r.onerror = () => res(null); r.readAsDataURL(file);
     });
   }
-  async function vote(postId, value) {
-    if (!signedIn()) return loginNeeded("like or dislike photos");
-    const cur = cache.myVotes[postId] || 0;
-    if (cur === value) { await sb.from("post_votes").delete().eq("post_id", postId).eq("user_id", me.user.id); delete cache.myVotes[postId]; }
+  async function heart(postId, onlyOn) {
+    if (!signedIn()) return loginNeeded("heart photos");
+    const loved = cache.myVotes[postId] === 1;
+    if (loved && onlyOn) return;
+    const value = 1;
+    if (loved) { await sb.from("post_votes").delete().eq("post_id", postId).eq("user_id", me.user.id); delete cache.myVotes[postId]; }
     else { await sb.from("post_votes").upsert({ post_id: postId, user_id: me.user.id, value }); cache.myVotes[postId] = value; }
     refreshVisiblePosts();
   }
@@ -264,12 +262,19 @@
     const post = b.closest("[data-post]"); const pid = post ? +post.dataset.post : null;
     switch (b.dataset.soc) {
       case "signout": await sb.auth.signOut(); me.user = null; me.profile = null; toast("Signed out"); render(); break;
-      case "vote": vote(pid, +b.dataset.v); break;
+      case "heart": heart(pid); break;
+      case "dbl": { // double-tap the photo to heart it, like Instagram
+        const now = Date.now();
+        if (b._last && now - b._last < 350) {
+          b._last = 0; const pop = document.createElement("span"); pop.className = "heartpop"; pop.textContent = "❤️"; pop.setAttribute("aria-hidden", "true");
+          b.parentNode.appendChild(pop); setTimeout(() => pop.remove(), 900); heart(pid, true);
+        } else b._last = now;
+        break;
+      }
       case "comments":
         if (openComments.has(pid)) openComments.delete(pid); else { openComments.add(pid); if (!cache.comments[pid]) { refreshVisiblePostsSoon(); await loadComments(pid); } }
         refreshVisiblePostsSoon(); break;
       case "delpost": deletePost(pid); break;
-      case "unbury": shown.add(pid); refreshVisiblePostsSoon(); break;
       case "cancelupload": document.getElementById("hd-upload")?.reset(); document.getElementById("hd-upload-more").hidden = true; break;
       case "openspot": {
         const s = findSpot(b.dataset.spot);

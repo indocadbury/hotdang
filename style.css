@@ -66,6 +66,8 @@ main{display:grid;grid-template-columns:1fr 360px;min-height:0}
 .tool{background:var(--surface);border:2px solid #2a1a0e;border-radius:999px;padding:6px 14px;font-size:14px;font-weight:600;box-shadow:0 3px 0 #2a1a0e}
 .tool[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
 .counter{position:absolute;z-index:500;top:12px;left:max(12px,env(safe-area-inset-left,0px));background:var(--mustard);color:var(--mustard-ink);border:2px solid #2a1a0e;border-radius:999px;padding:5px 14px 5px 8px;font-weight:700;font-size:15px;box-shadow:0 3px 0 #2a1a0e;display:flex;align-items:center;gap:6px}
+.donatepill{position:absolute;z-index:500;top:58px;left:max(12px,env(safe-area-inset-left,0px));background:var(--ketchup);color:#fff;border:2px solid #2a1a0e;border-radius:999px;padding:6px 14px;font-weight:700;font-size:14px;box-shadow:0 3px 0 #2a1a0e}
+.donatepill:active{transform:translateY(2px);box-shadow:0 1px 0 #2a1a0e}
 .counter b{font-family:var(--logo);font-weight:400;font-size:24px;line-height:1}
 .counter svg{width:32px;height:19px}
 @keyframes bump{0%{transform:scale(1)}40%{transform:scale(1.25) rotate(-4deg)}100%{transform:scale(1)}}
@@ -175,6 +177,11 @@ textarea{min-height:70px;resize:vertical}
 .votes{display:flex;flex-wrap:wrap;gap:6px}
 .vote{border:2px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:5px 12px;font:inherit;font-weight:600;font-size:14px;min-height:36px;cursor:pointer}
 .vote.on{border-color:var(--ink);background:var(--mustard);color:var(--mustard-ink)}
+.vote.heart.on{background:var(--surface);color:var(--ink);border-color:var(--ketchup)}
+.post-img{cursor:pointer}
+.heartpop{position:absolute;left:50%;top:50%;font-size:90px;transform:translate(-50%,-50%) scale(0);pointer-events:none;animation:heartpop .8s ease-out forwards}
+@keyframes heartpop{30%{transform:translate(-50%,-50%) scale(1.15);opacity:1}70%{transform:translate(-50%,-50%) scale(1)}100%{transform:translate(-50%,-50%) scale(1);opacity:0}}
+@media (prefers-reduced-motion: reduce){.heartpop{animation:none;opacity:0}}
 .comments{display:flex;flex-direction:column;gap:6px;border-top:2px dashed var(--line);padding-top:8px}
 .comment{font-size:14px;overflow-wrap:anywhere}
 .comment .note{margin-left:4px}
