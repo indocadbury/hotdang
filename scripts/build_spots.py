@@ -6,7 +6,7 @@ Writes data/spots/<lat>_<lng>.json, one file per 1-degree square, each holding
   c = convenience store or fuel station chain known for roller-grill hotdogs,
   f = warehouse / food court chain with a hotdog deal (Costco, IKEA),
   k = restaurant chain with hotdogs on the menu (Five Guys, Shake Shack, Sonic...).
-Run by .github/workflows/data.yml. Needs: pip install duckdb, and the aws CLI.
+Run by hand about once a month (not on GitHub Actions); upload the result as the spots-data release asset. Needs: pip install duckdb, and the aws CLI.
 """
 import json, os, re, subprocess, sys, time
 import duckdb
