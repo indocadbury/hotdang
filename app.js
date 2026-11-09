@@ -89,6 +89,12 @@ const specialsText = (s, n = 3) => specialsOf(s).slice(0, n).map((x) => x.label)
 const visible = () => allSpots().filter((s) => state.filter === "all" || (state.filter === "special" ? specialsOf(s).length > 0 : s.type === state.filter)).sort((a, b) => dist(a) - dist(b));
 const findSpot = (id) => allSpots().find((s) => s.id === id);
 function ratingOf(id) { const rs = state.reviews[id] || []; return { n: rs.length, avg: rs.length ? rs.reduce((a, r) => a + r.stars, 0) / rs.length : 0 }; }
+// "Take me there" opens Google Maps directions from wherever you are: walking when close, driving past 5 km.
+function openDirections(s) {
+  if (!s) return;
+  const mode = state.me && dist(s) > 5000 ? "driving" : "walking";
+  window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=${mode}`, "_blank", "noopener");
+}
 const mapsUrl = (s) => `https://www.google.com/maps/dir/?api=1${state.me ? `&origin=${state.me.lat},${state.me.lng}` : ""}&destination=${s.lat},${s.lng}&travelmode=walking`;
 let toastTimer;
 function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2400); }
@@ -521,7 +527,7 @@ async function notify(s, d) {
   } catch (e) {}
   if (document.visibilityState === "visible") toast(title);
 }
-function goTo(id) { const s = findSpot(id); if (s) startNav(s); }
+function goTo(id) { const s = findSpot(id); if (!s) return; state.selected = s.id; state.tab = "spots"; map.panTo([s.lat, s.lng]); render(); showPanel(); }
 let pendingGo = new URLSearchParams(location.search).get("go");
 function openFromLink() { if (pendingGo && findSpot(pendingGo)) { const id = pendingGo; pendingGo = null; history.replaceState(null, "", location.pathname); goTo(id); } }
 if ("serviceWorker" in navigator) {
@@ -796,7 +802,7 @@ panel.addEventListener("click", (e) => {
   const s = (state.nav && state.nav.spot) || findSpot(state.selected) || visible()[0];
   switch (b.dataset.act) {
     case "retry": loadSpots(); break;
-    case "go": startNav(s); break;
+    case "go": openDirections(s); break;
     case "stopnav": stopNav(); break;
     case "recenter": state.follow = true; if (state.me) map.panTo([state.me.lat, state.me.lng]); render(); break;
     case "alertson": enableAlerts(); break;
@@ -895,7 +901,7 @@ function showDogPop(n, joint) {
         ${sp.length ? `<div class="dogs">${sp.map((x) => `<span class="dogchip">${x.label}</span>`).join("")}</div>` : ""}
       </div>
       ${joint ? `<button class="dogpop-joint" data-pop="joint" data-id="${esc(joint.id)}"><span>Closest hotdog joint</span><b>${esc(joint.name)}</b><span>${TYPES[joint.type]} · ${fmtDist(dist(joint))} away ›</span></button>` : ""}
-      <div class="actions"><button class="btn eat" data-pop="go">${m > 5000 ? "Drive there" : "Take me there"}</button><button class="btn" data-pop="info">More info</button></div>`;
+      <div class="actions"><button class="btn eat" data-pop="go">Take me there</button><button class="btn" data-pop="info">More info</button></div>`;
   }
   $("#dogpop").hidden = false;
   setTimeout(() => $("#dogpop .btn")?.focus(), 50);
@@ -913,8 +919,7 @@ $("#dogpop").addEventListener("click", (e) => {
     return;
   }
   if (b.dataset.pop === "go" && n) {
-    if (dist(n) > 5000) window.open(mapsUrl(n).replace("travelmode=walking", "travelmode=driving"), "_blank", "noopener"); // too far to walk
-    else { startNav(n); showPanel(); }
+    openDirections(n);
   }
   else if (b.dataset.pop === "info") showPanel();
   else if (b.dataset.pop === "search") $("#searchBtn").click();
