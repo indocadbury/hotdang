@@ -194,7 +194,7 @@ async function overpass(q) {
 }
 /* Spot data comes from two places:
  *  1. Our own files (data/spots/<lat>_<lng>.json, one per 1° square), built monthly from
- *     Overture Maps open places data by .github/workflows/data.yml. Fast and always there.
+ *     Overture Maps open places data by scripts/build_spots.py (run by hand each month). Fast and always there.
  *  2. OpenStreetMap via Overpass, as a bonus (opening hours, street vendors). Those public
  *     servers are often overloaded, so this is best-effort with a short timeout. */
 const cellCache = {};

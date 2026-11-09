@@ -22,7 +22,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Add hotdog spot data (built by data.yml)
+      - name: Add hotdog spot data (built by scripts/build_spots.py, run by hand)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
